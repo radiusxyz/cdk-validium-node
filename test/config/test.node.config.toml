@@ -117,6 +117,9 @@ StateConsistencyCheckInterval = "5s"
 		HaltOnBatchNumber = 0
 		SequentialBatchSanityCheck = false
 		SequentialProcessL2Block = true
+    UseExternalSequencer = true
+    RollupId = "1"
+    ExternalSequencerNodeURI = "http://147.46.240.248:8000"
 	[Sequencer.Finalizer.Metrics]
 		Interval = "60m"
 		EnableLog = true		
