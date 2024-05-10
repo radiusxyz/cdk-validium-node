@@ -19,6 +19,7 @@ import (
 	"github.com/0xPolygonHermez/zkevm-node/state/runtime"
 	"github.com/0xPolygonHermez/zkevm-node/state/runtime/executor"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 const (
@@ -293,6 +294,21 @@ func (f *finalizer) checkL1InfoTreeUpdate(ctx context.Context) {
 	}
 }
 
+func hexToTx(str string) (*types.Transaction, error) {
+	tx := new(types.Transaction)
+
+	b, err := hex.DecodeHex(str)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.UnmarshalBinary(b); err != nil {
+		return nil, err
+	}
+
+	return tx, nil
+}
+
 // finalizeBatches runs the endless loop for processing transactions finalizing batches.
 func (f *finalizer) finalizeBatches(ctx context.Context) {
 	log.Debug("finalizer init loop")
@@ -300,55 +316,65 @@ func (f *finalizer) finalizeBatches(ctx context.Context) {
 	for {
 		// We have reached the L2 block time, we need to close the current L2 block and open a new one
 		if f.wipL2Block.timestamp+uint64(f.cfg.L2BlockMaxDeltaTimestamp.Seconds()) <= uint64(time.Now().Unix()) {
-			f.finalizeWIPL2Block(ctx)
+			err := f.finalizeWIPL2Block(ctx)
+			if err != nil {
+
+				log.Debugf("failed to finalizeWIPL2Block, error: %v", err)
+
+				duration := time.Duration(f.cfg.L2BlockMaxDeltaTimestamp.Seconds() * float64(time.Second))
+				time.Sleep(duration)
+				continue
+			}
 		}
 
-		tx, err := f.workerIntf.GetBestFittingTx(f.wipBatch.imRemainingResources)
+		if !f.cfg.UseExternalSequencer {
+			tx, err := f.workerIntf.GetBestFittingTx(f.wipBatch.imRemainingResources)
 
-		// If we have txs pending to process but none of them fits into the wip batch, we close the wip batch and open a new one
-		if err == ErrNoFittingTransaction {
-			f.finalizeWIPBatch(ctx, state.NoTxFitsClosingReason)
-			continue
-		}
+			// If we have txs pending to process but none of them fits into the wip batch, we close the wip batch and open a new one
+			if err == ErrNoFittingTransaction {
+				f.finalizeWIPBatch(ctx, state.NoTxFitsClosingReason)
+				continue
+			}
 
-		if tx != nil {
-			showNotFoundTxLog = true
+			if tx != nil {
+				showNotFoundTxLog = true
 
-			firstTxProcess := true
+				firstTxProcess := true
 
-			for {
-				var err error
-				_, err = f.processTransaction(ctx, tx, firstTxProcess)
-				if err != nil {
-					if err == ErrEffectiveGasPriceReprocess {
-						firstTxProcess = false
-						log.Infof("reprocessing tx %s because of effective gas price calculation", tx.HashStr)
-						continue
-					} else if err == ErrBatchResourceOverFlow {
-						log.Infof("skipping tx %s due to a batch resource overflow", tx.HashStr)
-						break
-					} else {
-						log.Errorf("failed to process tx %s, error: %v", err)
-						break
+				for {
+					var err error
+					_, err = f.processTransaction(ctx, tx, firstTxProcess)
+					if err != nil {
+						if err == ErrEffectiveGasPriceReprocess {
+							firstTxProcess = false
+							log.Infof("reprocessing tx %s because of effective gas price calculation", tx.HashStr)
+							continue
+						} else if err == ErrBatchResourceOverFlow {
+							log.Infof("skipping tx %s due to a batch resource overflow", tx.HashStr)
+							break
+						} else {
+							log.Errorf("failed to process tx %s, error: %v", err)
+							break
+						}
 					}
+					break
 				}
-				break
+			} else {
+				idleTime := time.Now()
+
+				if showNotFoundTxLog {
+					log.Debug("no transactions to be processed. Waiting...")
+					showNotFoundTxLog = false
+				}
+
+				// wait for new ready txs in worker
+				f.workerReadyTxsCond.L.Lock()
+				f.workerReadyTxsCond.WaitOrTimeout(f.cfg.NewTxsWaitInterval.Duration)
+				f.workerReadyTxsCond.L.Unlock()
+
+				// Increase idle time of the WIP L2Block
+				f.wipL2Block.metrics.idleTime += time.Since(idleTime)
 			}
-		} else {
-			idleTime := time.Now()
-
-			if showNotFoundTxLog {
-				log.Debug("no transactions to be processed. Waiting...")
-				showNotFoundTxLog = false
-			}
-
-			// wait for new ready txs in worker
-			f.workerReadyTxsCond.L.Lock()
-			f.workerReadyTxsCond.WaitOrTimeout(f.cfg.NewTxsWaitInterval.Duration)
-			f.workerReadyTxsCond.L.Unlock()
-
-			// Increase idle time of the WIP L2Block
-			f.wipL2Block.metrics.idleTime += time.Since(idleTime)
 		}
 
 		if f.haltFinalizer.Load() {

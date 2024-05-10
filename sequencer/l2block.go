@@ -2,11 +2,13 @@ package sequencer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/0xPolygonHermez/zkevm-node/event"
 	"github.com/0xPolygonHermez/zkevm-node/hex"
+	"github.com/0xPolygonHermez/zkevm-node/jsonrpc/client"
 	"github.com/0xPolygonHermez/zkevm-node/log"
 	"github.com/0xPolygonHermez/zkevm-node/pool"
 	"github.com/0xPolygonHermez/zkevm-node/state"
@@ -14,6 +16,11 @@ import (
 	"github.com/0xPolygonHermez/zkevm-node/state/runtime/executor"
 	"github.com/ethereum/go-ethereum/common"
 )
+
+type GetRawTxListResponse struct {
+	IsBuildingBlock bool `json:"is_building_block"`
+	RawTxList []string `json:"raw_tx_list"`
+}
 
 // L2Block represents a wip or processed L2 block
 type L2Block struct {
@@ -443,16 +450,85 @@ func (f *finalizer) storeL2Block(ctx context.Context, l2Block *L2Block) error {
 	return nil
 }
 
+func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
+	res, err := client.JSONRPCCall(f.cfg.ExternalSequencerNodeURI, "get_raw_tx_list", map[string]interface{}{
+				"rollup_id": f.cfg.RollupId,
+				"block_height": f.wipL2Block.trackingNum,
+			})
+		if err != nil {
+			return nil, fmt.Errorf("get raw tx list RPC error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+		}
+		if res.Error != nil {
+			return nil, fmt.Errorf("get raw tx list of block [%d] error: %v", f.wipL2Block.trackingNum, res.Error)
+		}
+
+		var getRawTxListResponse GetRawTxListResponse
+		err = json.Unmarshal(res.Result, &getRawTxListResponse)
+		if err != nil {
+			return nil, fmt.Errorf("get raw tx list unmarshal error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+		}
+
+		return &getRawTxListResponse, nil
+}
+
 // finalizeWIPL2Block closes the wip L2 block and opens a new one
-func (f *finalizer) finalizeWIPL2Block(ctx context.Context) {
+func (f *finalizer) finalizeWIPL2Block(ctx context.Context) error {
 	log.Debugf("finalizing WIP L2 block [%d]", f.wipL2Block.trackingNum)
 
 	prevTimestamp := f.wipL2Block.timestamp
 	prevL1InfoTreeIndex := f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex
 
-	f.closeWIPL2Block(ctx)
+	if !f.cfg.UseExternalSequencer {
+		f.closeWIPL2Block(ctx)
 
-	f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
+		f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
+	} else {
+		getRawTxListResponse, err := f.getRawTxList()
+
+		if err != nil {
+			return err
+		}
+		
+		if !getRawTxListResponse.IsBuildingBlock {
+			for _, txString := range getRawTxListResponse.RawTxList {
+					tx, _ := hexToTx(txString)
+					processBatchResponse, _ := f.stateIntf.PreProcessTransaction(ctx, tx, nil)
+
+					poolTx := pool.NewTransaction(*tx, "", false)
+					poolTx.ZKCounters = processBatchResponse.UsedZkCounters
+					poolTx.ReservedZKCounters = processBatchResponse.ReservedZkCounters
+
+					txTracker, _ := f.workerIntf.NewTxTracker(poolTx.Transaction, poolTx.ZKCounters, poolTx.ReservedZKCounters, poolTx.IP)
+
+					firstTxProcess := true
+
+					for {
+						var err error
+						_, err = f.processTransaction(ctx, txTracker, firstTxProcess)
+						if err != nil {
+							if err == ErrEffectiveGasPriceReprocess {
+								firstTxProcess = false
+								log.Infof("reprocessing tx %s because of effective gas price calculation", txTracker.HashStr)
+								continue
+							} else if err == ErrBatchResourceOverFlow {
+								log.Infof("skipping tx %s due to a batch resource overflow", txTracker.HashStr)
+								break
+							} else {
+								log.Errorf("failed to process tx %s, error: %v", err)
+								break
+							}
+						}
+						break
+					}
+			}			
+			f.closeWIPL2Block(ctx)
+			f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
+		} else {
+			return fmt.Errorf("the block is building in external sequencer (block height: [%d])", f.wipL2Block.trackingNum)
+		}
+	}
+
+	return nil
 }
 
 // closeWIPL2Block closes the wip L2 block
@@ -477,10 +553,7 @@ func (f *finalizer) closeWIPL2Block(ctx context.Context) {
 	f.wipL2Block = nil
 }
 
-// openNewWIPL2Block opens a new wip L2 block
-func (f *finalizer) openNewWIPL2Block(ctx context.Context, prevTimestamp uint64, prevL1InfoTreeIndex *uint32) {
-	processStart := time.Now()
-
+func (f *finalizer) generateNewWIPL2Block(ctx context.Context, prevTimestamp uint64, prevL1InfoTreeIndex *uint32) *L2Block {
 	newL2Block := &L2Block{}
 	newL2Block.createdAt = time.Now()
 
@@ -512,7 +585,14 @@ func (f *finalizer) openNewWIPL2Block(ctx context.Context, prevTimestamp uint64,
 		newL2Block.l1InfoTreeExitRootChanged = (newL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex != *prevL1InfoTreeIndex)
 	}
 
-	f.wipL2Block = newL2Block
+	return newL2Block
+}
+
+// openNewWIPL2Block opens a new wip L2 block
+func (f *finalizer) openNewWIPL2Block(ctx context.Context, prevTimestamp uint64, prevL1InfoTreeIndex *uint32) {
+	processStart := time.Now()
+
+	f.wipL2Block = f.generateNewWIPL2Block(ctx, prevTimestamp, prevL1InfoTreeIndex)
 
 	log.Debugf("creating new WIP L2 block [%d], batch: %d, deltaTimestamp: %d, timestamp: %d, l1InfoTreeIndex: %d, l1InfoTreeIndexChanged: %v",
 		f.wipL2Block.trackingNum, f.wipBatch.batchNumber, f.wipL2Block.deltaTimestamp, f.wipL2Block.timestamp, f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex, f.wipL2Block.l1InfoTreeExitRootChanged)

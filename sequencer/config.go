@@ -93,6 +93,16 @@ type FinalizerCfg struct {
 
 	// Metrics is the config for the sequencer metrics
 	Metrics MetricsCfg `mapstructure:"Metrics"`
+
+	// UseExternalSequencer
+	UseExternalSequencer bool `mapstructure:"UseExternalSequencer"`
+
+	// RollupId
+	RollupId string `mapstructure:"RollupId"`
+	
+	// ExternalSequencerNodeURI is used allow Non-Sequencer nodes
+	// to relay transactions to the Sequencer node
+	ExternalSequencerNodeURI string `mapstructure:"ExternalSequencerNodeURI"`
 }
 
 // MetricsCfg contains the sequencer metrics configuration properties
