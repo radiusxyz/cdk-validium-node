@@ -58,6 +58,7 @@ func newMockedServer(t *testing.T, cfg Config) (*mockedServer, *mocksWrapper, *e
 		APIZKEVM:  true,
 		APITxPool: true,
 		APIWeb3:   true,
+		Simulator: true,
 	}
 
 	var newL2BlockEventHandler state.NewL2BlockEventHandler = func(e state.NewL2BlockEvent) {}

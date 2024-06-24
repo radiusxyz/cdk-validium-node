@@ -473,6 +473,13 @@ func runJSONRPCServer(c config.Config, etherman *etherman.Client, chainID uint64
 		})
 	}
 
+	if _, ok := apis[jsonrpc.Simulator]; ok {
+		services = append(services, jsonrpc.Service{
+			Name:    jsonrpc.Simulator,
+			Service: jsonrpc.NewSimulatorEndpoints(c.RPC, pool, st, etherman),
+		})
+	}
+
 	if err := jsonrpc.NewServer(c.RPC, chainID, pool, st, storage, services).Start(); err != nil {
 		log.Fatal(err)
 	}

@@ -438,7 +438,7 @@ services:
     command:
       - "/bin/sh"
       - "-c"
-      - "/app/zkevm-node run --network custom --custom-network-file /app/genesis.json --cfg /app/config.toml --components rpc --http.api eth,net,debug,zkevm,txpool,web3"
+      - "/app/zkevm-node run --network custom --custom-network-file /app/genesis.json --cfg /app/config.toml --components rpc --http.api eth,net,debug,zkevm,txpool,web3,simulator"
 
   zkevm-explorer-l2-db:
     container_name: zkevm-explorer-l2-db
@@ -460,7 +460,7 @@ services:
     command:
       - "--http"
       - "--http.api"
-      - "admin,eth,debug,miner,net,txpool,personal,web3"
+      - "admin,eth,debug,miner,net,txpool,personal,web3,simulator"
       - "--http.addr"
       - "0.0.0.0"
       - "--http.corsdomain"
@@ -490,7 +490,7 @@ services:
     command:
       - "--http"
       - "--http.api"
-      - "admin,eth,debug,miner,net,txpool,personal,web3"
+      - "admin,eth,debug,miner,net,txpool,personal,web3,simulator"
       - "--http.addr"
       - "0.0.0.0"
       - "--http.corsdomain"

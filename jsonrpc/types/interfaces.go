@@ -79,10 +79,19 @@ type StateInterface interface {
 	GetLatestBatchGlobalExitRoot(ctx context.Context, dbTx pgx.Tx) (common.Hash, error)
 	GetL2TxHashByTxHash(ctx context.Context, hash common.Hash, dbTx pgx.Tx) (*common.Hash, error)
 	PreProcessUnsignedTransaction(ctx context.Context, tx *types.Transaction, sender common.Address, l2BlockNumber *uint64, dbTx pgx.Tx) (*state.ProcessBatchResponse, error)
+
+	PreProcessTransaction(ctx context.Context, tx *types.Transaction, dbTx pgx.Tx) (*state.ProcessBatchResponse, error)
+	ProcessBatchV2(ctx context.Context, request state.ProcessRequest, updateMerkleTree bool) (*state.ProcessBatchResponse, error)
+	GetForkIDByBatchNumber(batchNumber uint64) uint64
+	BuildChangeL2Block(deltaTimestamp uint32, l1InfoTreeIndex uint32) []byte
+	GetLatestL1InfoRoot(ctx context.Context, maxBlockNumber uint64) (state.L1InfoTreeExitRootStorageEntry, error)
 }
 
 // EthermanInterface provides integration with L1
 type EthermanInterface interface {
 	GetSafeBlockNumber(ctx context.Context) (uint64, error)
 	GetFinalizedBlockNumber(ctx context.Context) (uint64, error)
+	
+	TrustedSequencer() (common.Address, error)
+	GetLatestBlockNumber(ctx context.Context) (uint64, error)
 }

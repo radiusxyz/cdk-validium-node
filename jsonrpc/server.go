@@ -33,6 +33,8 @@ const (
 	APITxPool = "txpool"
 	// APIWeb3 represents the web3 API prefix.
 	APIWeb3 = "web3"
+	// Simulator represents the simulation about a block.
+	Simulator = "simulator"
 
 	wsBufferSizeLimitInBytes = 1024
 	maxRequestContentLength  = 1024 * 1024 * 5
