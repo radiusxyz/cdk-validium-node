@@ -72,8 +72,6 @@ func NewSimulatorEndpoints(cfg Config, pool types.PoolInterface, state types.Sta
 
 	e.sequencerAddr = sequencerAddr
 
-	fmt.Println("stompesi - sequencerAddr", sequencerAddr)
-
 	return e
 }
 
@@ -164,10 +162,7 @@ func (s *SimulatorEndpoints) SimulateBlock(RawTxList []string) (interface{}, typ
 				simulatedResult = append(simulatedResult, 1)
 			}
 
-			fmt.Println("stompesi - txResponse", txResponse)
-			fmt.Println("stompesi - txResponse.RomError", txResponse.RomError)
-			fmt.Println("stompesi - txResponse.ReturnValue", txResponse.ReturnValue)
-			fmt.Println("")
+		
 		}
 
 		return simulatedResult, nil
@@ -246,9 +241,6 @@ func (s *SimulatorEndpoints) processTransaction(ctx context.Context, tx *sequenc
 	batchRequest.Transactions = append(batchRequest.Transactions, effectivePercentageAsDecodedHex...)
 	batchResponse, err := s.state.ProcessBatchV2(ctx, batchRequest, false)
 
-	fmt.Println("stompesi - batchResponse", batchResponse)
-	fmt.Println("stompesi - err", err)
-
 	if err != nil && (errors.Is(err, runtime.ErrExecutorDBError) || errors.Is(err, runtime.ErrInvalidTxChangeL2BlockMinTimestamp)) {
 		log.Errorf("failed to process tx %s, error: %v", tx.HashStr, err)
 		return false
@@ -258,15 +250,8 @@ func (s *SimulatorEndpoints) processTransaction(ctx context.Context, tx *sequenc
 	}
 
 	blockResponse := batchResponse.BlockResponses[0]
-
-	fmt.Println("processTransaction - stompesi - blockResponse.TransactionResponses", blockResponse.TransactionResponses)
 	
 	for _, txResponse := range blockResponse.TransactionResponses {
-		fmt.Println("processTransaction - stompesi - txResponse", txResponse)
-		fmt.Println("processTransaction - stompesi - txResponse.RomError", txResponse.RomError)
-		fmt.Println("processTransaction - stompesi - txResponse.ReturnValue", txResponse.ReturnValue)
-		fmt.Println("")
-
 		if txResponse.RomError != nil {
 			return false
 		} 
