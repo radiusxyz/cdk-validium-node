@@ -174,7 +174,9 @@ func (s *SimulatorEndpoints) SimulateBlock(RawTxList []string) (interface{}, typ
 	})
 }
 
-func (s *SimulatorEndpoints) SimulateTransactions(RawTxList []string) (interface{}, types.Error) {
+func (s *SimulatorEndpoints) SimulateTransactions(rawTxList []string) (interface{}, types.Error) {
+	fmt.Println("Received simulation request", rawTxList)
+
 	return s.txMan.NewDbTxScope(s.state, func(ctx context.Context, dbTx pgx.Tx) (interface{}, types.Error) {
 		lastBatchNum, err := s.state.GetLastBatchNumber(ctx, dbTx)
 		if err != nil {
@@ -192,7 +194,7 @@ func (s *SimulatorEndpoints) SimulateTransactions(RawTxList []string) (interface
 		
 		simulatedResult := []uint32{}
 
-		for _, txString := range RawTxList {
+		for _, txString := range rawTxList {
 				tx, _ := hexToTx(txString)
 				
 				processBatchResponse, _ := s.state.PreProcessTransaction(ctx, tx, dbTx)
@@ -211,6 +213,7 @@ func (s *SimulatorEndpoints) SimulateTransactions(RawTxList []string) (interface
 				}
 		}
 	
+		fmt.Println("Respond simulation result", simulatedResult)
 		return simulatedResult, nil
 	})
 }
