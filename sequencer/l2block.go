@@ -18,8 +18,8 @@ import (
 )
 
 type GetRawTxListResponse struct {
-	IsBuildingBlock bool `json:"is_building_block"`
-	RawTxList []string `json:"raw_tx_list"`
+	IsBuildingBlock bool     `json:"is_building_block"`
+	RawTxList       []string `json:"raw_tx_list"`
 }
 
 // L2Block represents a wip or processed L2 block
@@ -456,23 +456,23 @@ func (f *finalizer) storeL2Block(ctx context.Context, l2Block *L2Block) error {
 
 func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 	res, err := client.JSONRPCCall(f.cfg.ExternalSequencerNodeURI, "get_raw_tx_list", map[string]interface{}{
-				"rollup_id": f.cfg.RollupId,
-				"block_height": f.wipL2Block.trackingNum,
-			})
-		if err != nil {
-			return nil, fmt.Errorf("get raw tx list RPC error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-		}
-		if res.Error != nil {
-			return nil, fmt.Errorf("get raw tx list of block [%d] error: %v", f.wipL2Block.trackingNum, res.Error)
-		}
+		"rollup_id":    f.cfg.RollupId,
+		"block_height": f.wipL2Block.trackingNum + 1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get raw tx list RPC error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+	}
+	if res.Error != nil {
+		return nil, fmt.Errorf("get raw tx list of block [%d] error: %v", f.wipL2Block.trackingNum, res.Error)
+	}
 
-		var getRawTxListResponse GetRawTxListResponse
-		err = json.Unmarshal(res.Result, &getRawTxListResponse)
-		if err != nil {
-			return nil, fmt.Errorf("get raw tx list unmarshal error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-		}
+	var getRawTxListResponse GetRawTxListResponse
+	err = json.Unmarshal(res.Result, &getRawTxListResponse)
+	if err != nil {
+		return nil, fmt.Errorf("get raw tx list unmarshal error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+	}
 
-		return &getRawTxListResponse, nil
+	return &getRawTxListResponse, nil
 }
 
 // finalizeWIPL2Block closes the wip L2 block and opens a new one
@@ -492,39 +492,39 @@ func (f *finalizer) finalizeWIPL2Block(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		
+
 		if !getRawTxListResponse.IsBuildingBlock {
 			for _, txString := range getRawTxListResponse.RawTxList {
-					tx, _ := hexToTx(txString)
-					processBatchResponse, _ := f.stateIntf.PreProcessTransaction(ctx, tx, nil)
+				tx, _ := hexToTx(txString)
+				processBatchResponse, _ := f.stateIntf.PreProcessTransaction(ctx, tx, nil)
 
-					poolTx := pool.NewTransaction(*tx, "", false)
-					poolTx.ZKCounters = processBatchResponse.UsedZkCounters
-					poolTx.ReservedZKCounters = processBatchResponse.ReservedZkCounters
+				poolTx := pool.NewTransaction(*tx, "", false)
+				poolTx.ZKCounters = processBatchResponse.UsedZkCounters
+				poolTx.ReservedZKCounters = processBatchResponse.ReservedZkCounters
 
-					txTracker, _ := f.workerIntf.NewTxTracker(poolTx.Transaction, poolTx.ZKCounters, poolTx.ReservedZKCounters, poolTx.IP)
+				txTracker, _ := f.workerIntf.NewTxTracker(poolTx.Transaction, poolTx.ZKCounters, poolTx.ReservedZKCounters, poolTx.IP)
 
-					firstTxProcess := true
+				firstTxProcess := true
 
-					for {
-						var err error
-						_, err = f.processTransaction(ctx, txTracker, firstTxProcess)
-						if err != nil {
-							if err == ErrEffectiveGasPriceReprocess {
-								firstTxProcess = false
-								log.Infof("reprocessing tx %s because of effective gas price calculation", txTracker.HashStr)
-								continue
-							} else if err == ErrBatchResourceOverFlow {
-								log.Infof("skipping tx %s due to a batch resource overflow", txTracker.HashStr)
-								break
-							} else {
-								log.Errorf("failed to process tx %s, error: %v", err)
-								break
-							}
+				for {
+					var err error
+					_, err = f.processTransaction(ctx, txTracker, firstTxProcess)
+					if err != nil {
+						if err == ErrEffectiveGasPriceReprocess {
+							firstTxProcess = false
+							log.Infof("reprocessing tx %s because of effective gas price calculation", txTracker.HashStr)
+							continue
+						} else if err == ErrBatchResourceOverFlow {
+							log.Infof("skipping tx %s due to a batch resource overflow", txTracker.HashStr)
+							break
+						} else {
+							log.Errorf("failed to process tx %s, error: %v", err)
+							break
 						}
-						break
 					}
-			}			
+					break
+				}
+			}
 			f.closeWIPL2Block(ctx)
 			f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
 		} else {
