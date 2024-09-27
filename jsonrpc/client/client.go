@@ -33,12 +33,15 @@ func JSONRPCCall(url, method string, parameters ...interface{}) (types.Response,
 		return types.Response{}, err
 	}
 
+	fmt.Println("stompeis - parameters", parameters)
 	request := types.Request{
 		JSONRPC: jsonRPCVersion,
 		ID:      float64(1),
 		Method:  method,
 		Params:  params,
 	}
+
+	fmt.Println("stompeis - request", request)
 
 	httpRes, err := sendJSONRPC_HTTPRequest(url, request)
 	if err != nil {

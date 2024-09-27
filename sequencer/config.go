@@ -30,6 +30,9 @@ type Config struct {
 
 	// StreamServerCfg is the config for the stream server
 	StreamServer StreamServerCfg `mapstructure:"StreamServer"`
+
+	// SequencerPrivateKey Private key of the trusted sequencer
+	SequencerPrivateKey types.KeystoreFileConfig `mapstructure:"SequencerPrivateKey"`
 }
 
 // StreamServerCfg contains the data streamer's configuration properties
@@ -99,10 +102,27 @@ type FinalizerCfg struct {
 
 	// RollupId
 	RollupId string `mapstructure:"RollupId"`
+
+	// Platform
+	Platform string `mapstructure:"Platform"`
+
+	// Platform Url
+	PlatformUrl string `mapstructure:"PlatformUrl"`
+
+	LivenessContractAddress string `mapstructure:"LivenessContractAddress"`
 	
-	// ExternalSequencerNodeURI is used allow Non-Sequencer nodes
+	// ServiceType
+	ServiceType string `mapstructure:"ServiceType"`
+
+	// ClusterId
+	ClusterId string `mapstructure:"ClusterId"`
+	
+	// SeedNodeURI is used allow Non-Sequencer nodes
 	// to relay transactions to the Sequencer node
-	ExternalSequencerNodeURI string `mapstructure:"ExternalSequencerNodeURI"`
+	SeedNodeURI string `mapstructure:"SeedNodeURI"`
+
+	// SequencerPrivateKey Private key of the trusted sequencer
+	SequencerPrivateKey types.KeystoreFileConfig `mapstructure:"SequencerPrivateKey"`
 }
 
 // MetricsCfg contains the sequencer metrics configuration properties

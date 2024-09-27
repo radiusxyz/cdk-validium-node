@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"errors"
 	"fmt"
 	"math/big"
@@ -79,6 +80,8 @@ type finalizer struct {
 	// stream server
 	streamServer *datastreamer.StreamServer
 	dataToStream chan interface{}
+
+	sequencerPrivateKey *ecdsa.PrivateKey
 }
 
 // newFinalizer returns a new instance of Finalizer.
