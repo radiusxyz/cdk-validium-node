@@ -25,11 +25,11 @@ import (
 )
 
 type GetRawTxListResponse struct {
-	RawTransactionList       []string `json:"raw_transaction_list"`
+	RawTransactionList []string `json:"raw_transaction_list"`
 }
 
 type GetSequencerRpcUrlListResponse struct {
-	SequencerRrcUrlList       [][]string `json:"sequencer_rpc_url_list"`
+	SequencerRrcUrlList [][]string `json:"sequencer_rpc_url_list"`
 }
 
 // L2Block represents a wip or processed L2 block
@@ -483,15 +483,15 @@ func (f *finalizer) finalizeWIPL2Block(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		
+
 		getRawTxListResponse, err := f.getRawTxList()
-		
+
 		fmt.Println("stompesi - getRawTxListResponse", getRawTxListResponse)
 
 		if err != nil {
 			return err
 		}
-		
+
 		for _, txString := range getRawTxListResponse.RawTransactionList {
 			tx, _ := hexToTx(txString)
 			processBatchResponse, _ := f.stateIntf.PreProcessTransaction(ctx, tx, nil)
@@ -722,19 +722,18 @@ func (f *finalizer) dumpL2Block(l2Block *L2Block) {
 	}
 }
 
-
 func (f *finalizer) GetSequencerUrlList() (uint64, []string, error) {
 	platformClient, err := ethclient.Dial(f.cfg.PlatformUrl)
 	if err != nil {
-		return 0,nil, err
+		return 0, nil, err
 	}
 	defer platformClient.Close()
 
 	blockHeight, err := platformClient.BlockNumber(context.Background())
 	if err != nil {
-		return 0,nil, err
+		return 0, nil, err
 	}
-	
+
 	getSequencerListFunctionName := "getSequencerList"
 
 	contractABI, err := abi.JSON(strings.NewReader(`[
@@ -759,14 +758,14 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []string, error) {
     }
 	]`))
 	if err != nil {
-		return 0,nil, err
+		return 0, nil, err
 	}
 
 	contractAddress := common.HexToAddress(f.cfg.LivenessContractAddress)
 
 	data, err := contractABI.Pack(getSequencerListFunctionName, f.cfg.ClusterId)
 	if err != nil {
-		return 0,nil, err
+		return 0, nil, err
 	}
 
 	query := ethereum.CallMsg{
@@ -778,7 +777,6 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []string, error) {
 		return 0, nil, err
 	}
 
-
 	var sequencerList []common.Address
 	err = contractABI.UnpackIntoInterface(&sequencerList, getSequencerListFunctionName, result)
 	if err != nil {
@@ -787,19 +785,19 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []string, error) {
 
 	var addressStrings []string
 	for _, addr := range sequencerList {
-			if addr != common.HexToAddress("0x0000000000000000000000000000000000000000") {
-					addressStrings = append(addressStrings, addr.Hex())
-			}
+		if addr != common.HexToAddress("0x0000000000000000000000000000000000000000") {
+			addressStrings = append(addressStrings, addr.Hex())
+		}
 	}
-	
+
 	// JSON-RPC 요청 데이터 생성
 	request := JSONRPCRequest{
 		JSONRPC: "2.0",
 		Method:  "get_sequencer_rpc_url_list",
-		Params:  map[string]interface{}{
-        "sequencer_address_list": addressStrings,
-    }, 
-		ID:      1,
+		Params: map[string]interface{}{
+			"sequencer_address_list": addressStrings,
+		},
+		ID: 1,
 	}
 
 	// 요청을 JSON으로 직렬화
@@ -808,8 +806,24 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []string, error) {
 		return 0, nil, fmt.Errorf("Error marshaling request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
 
-	// HTTP POST 요청 전송
-	resp, err := http.Post(f.cfg.SeedNodeURI, "application/json", bytes.NewBuffer(reqBytes))
+	// HTTP 클라이언트 생성 및 요청 전송
+	client := &http.Client{
+		Timeout: time.Second * 10,
+		Transport: &http.Transport{
+			Proxy:             http.ProxyFromEnvironment,
+			DisableKeepAlives: true,
+		},
+	}
+
+	req, err := http.NewRequest("POST", f.cfg.SeedNodeURI, bytes.NewBuffer(reqBytes))
+	if err != nil {
+		return 0, nil, fmt.Errorf("Error creating request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cache-Control", "no-cache")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("Error making JSON-RPC request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
@@ -836,8 +850,8 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []string, error) {
 
 	var sequencer_rpc_url_list []string
 	for _, sequencerRpcUrl := range getSequencerRpcUrlListResponse.SequencerRrcUrlList {
-			sequencer_rpc_url_list = append(sequencer_rpc_url_list, sequencerRpcUrl[1])
-					
+		sequencer_rpc_url_list = append(sequencer_rpc_url_list, sequencerRpcUrl[1])
+
 	}
 
 	return blockHeight, sequencer_rpc_url_list, nil
@@ -857,14 +871,14 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 	fmt.Println("stompesi - rollup_block_height", rollup_block_height)
 	fmt.Println("stompesi - sequencerIndex", sequencerIndex)
 	fmt.Println("stompesi - sequencerUrlList", sequencerUrlList)
-	
+
 	// Sign the block request
 	message := map[string]interface{}{
-		"platform": f.cfg.Platform,
-		"rollup_id": f.cfg.RollupId,
-		"executor_address": f.sequencerAddress,
+		"platform":              f.cfg.Platform,
+		"rollup_id":             f.cfg.RollupId,
+		"executor_address":      f.sequencerAddress,
 		"platform_block_height": blockHeight,
-		"rollup_block_height": rollup_block_height,
+		"rollup_block_height":   rollup_block_height,
 	}
 
 	messageBytes, err := json.Marshal(message)
@@ -887,39 +901,59 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 	// "signature": [signature],
 
 	// JSON-RPC 요청 데이터 생성
-	request := JSONRPCRequest{
+	finalize_block_request := JSONRPCRequest{
 		JSONRPC: "2.0",
 		Method:  "finalize_block",
-		Params:  map[string]interface{}{
-			"message": message,
+		Params: map[string]interface{}{
+			"message":   message,
 			"signature": "",
-		}, 
-		ID:      1,
+		},
+		ID: 1,
 	}
 
-	fmt.Println("stompesi - finalize_block", request)
+	fmt.Println("stompesi - finalize_block", finalize_block_request)
 
 	// 요청을 JSON으로 직렬화
-	reqBytes, err := json.Marshal(request)
+	finalize_reqBytes, err := json.Marshal(finalize_block_request)
 	if err != nil {
 		return nil, fmt.Errorf("Error marshaling request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
+	fmt.Println("stompesi - reqBytes", finalize_reqBytes)
+	fmt.Println("stompesi - sequencer rpc url", sequencerRpcUrl)
 
-	// HTTP POST 요청 전송
-	resp, err := http.Post(sequencerRpcUrl, "application/json", bytes.NewBuffer(reqBytes))
+	////////////
+	// 새로운 HTTP POST 요청 생성
+	req, err := http.NewRequest("POST", sequencerRpcUrl, bytes.NewBuffer(finalize_reqBytes))
+	if err != nil {
+		return nil, fmt.Errorf("Error creating HTTP request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+	}
+
+	// 헤더 설정 (Cache-Control: no-cache 추가)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cache-Control", "no-cache") // 캐시 방지
+
+	// HTTP 클라이언트 생성 및 요청 전송
+	client := &http.Client{
+		Timeout: 10 * time.Second, // 타임아웃 10초 설정
+		Transport: &http.Transport{
+			Proxy:             http.ProxyFromEnvironment,
+			DisableKeepAlives: true,
+		},
+	}
+	finalize_block_resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Error making JSON-RPC request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
-	defer resp.Body.Close()
+	defer finalize_block_resp.Body.Close()
 
 	// 응답 처리
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := ioutil.ReadAll(finalize_block_resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("Error reading response (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
 
 	fmt.Println("stompesi - body", body)
-	
+
 	// 응답 JSON 파싱
 	var res JSONRPCResponse
 	err = json.Unmarshal(body, &res)
@@ -940,37 +974,45 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 	// }
 
 	// JSON-RPC 요청 데이터 생성
-	request = JSONRPCRequest{
+	finalize_block_request = JSONRPCRequest{
 		JSONRPC: "2.0",
 		Method:  "get_raw_transaction_list",
-		Params:  map[string]interface{}{
-			"rollup_id": f.cfg.RollupId,
+		Params: map[string]interface{}{
+			"rollup_id":           f.cfg.RollupId,
 			"rollup_block_height": rollup_block_height,
-		}, 
-		ID:      1,
+		},
+		ID: 1,
 	}
 
-	fmt.Println("stompesi - get_raw_transaction_list", request)
+	fmt.Println("stompesi - get_raw_transaction_list", finalize_block_request)
 
 	// 요청을 JSON으로 직렬화
-	reqBytes, err = json.Marshal(request)
+	finalize_reqBytes, err = json.Marshal(finalize_block_request)
 	if err != nil {
 		return nil, fmt.Errorf("Error marshaling request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
 
 	// HTTP POST 요청 전송
-	resp, err = http.Post(sequencerRpcUrl, "application/json", bytes.NewBuffer(reqBytes))
+	client = &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy:             http.ProxyFromEnvironment,
+			DisableKeepAlives: true,
+		},
+	}
+	finalize_block_resp, err = client.Post(sequencerRpcUrl, "application/json", bytes.NewBuffer(finalize_reqBytes))
 	if err != nil {
 		return nil, fmt.Errorf("Error making JSON-RPC request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
-	defer resp.Body.Close()
+
+	defer finalize_block_resp.Body.Close()
 
 	// 응답 처리
-	body, err = ioutil.ReadAll(resp.Body)
+	body, err = ioutil.ReadAll(finalize_block_resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("Error reading response (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
-	
+
 	fmt.Println("stompesi - body", body)
 
 	// 응답 JSON 파싱
@@ -986,11 +1028,8 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 		return nil, fmt.Errorf("get raw tx list unmarshal 222222 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
 
-	fmt.Println("stompesi - getRawTxListResponse")
-
 	return &getRawTxListResponse, nil
 }
-
 
 ////////////////////
 
