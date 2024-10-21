@@ -478,15 +478,13 @@ func (f *finalizer) finalizeWIPL2Block(ctx context.Context) error {
 	} else {
 		blockHeight, sequencerUrlList, err := f.GetSequencerUrlList()
 
-		fmt.Println("stompesi - blockHeight, sequencerUrlList", blockHeight, sequencerUrlList)
+		fmt.Println("blockHeight, sequencerUrlList", blockHeight, sequencerUrlList)
 
 		if err != nil {
 			return err
 		}
 
 		getRawTxListResponse, err := f.getRawTxList()
-
-		fmt.Println("stompesi - getRawTxListResponse", getRawTxListResponse)
 
 		if err != nil {
 			return err
@@ -868,10 +866,6 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 
 	sequencerRpcUrl := sequencerUrlList[sequencerIndex]
 
-	fmt.Println("stompesi - rollup_block_height", rollup_block_height)
-	fmt.Println("stompesi - sequencerIndex", sequencerIndex)
-	fmt.Println("stompesi - sequencerUrlList", sequencerUrlList)
-
 	// Sign the block request
 	message := map[string]interface{}{
 		"platform":              f.cfg.Platform,
@@ -886,7 +880,7 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 		log.Fatalf("Error converting message to bytes: %v", err)
 	}
 
-	fmt.Println("stompesi - messageBytes", messageBytes)
+	fmt.Println("messageBytes", messageBytes)
 
 	// h := signer.Hash(messageBytes)
 	// signature, err := crypto.Sign(messageBytes, f.sequencerPrivateKey)
@@ -911,15 +905,11 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 		ID: 1,
 	}
 
-	fmt.Println("stompesi - finalize_block", finalize_block_request)
-
 	// 요청을 JSON으로 직렬화
 	finalize_reqBytes, err := json.Marshal(finalize_block_request)
 	if err != nil {
 		return nil, fmt.Errorf("Error marshaling request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
-	fmt.Println("stompesi - reqBytes", finalize_reqBytes)
-	fmt.Println("stompesi - sequencer rpc url", sequencerRpcUrl)
 
 	////////////
 	// 새로운 HTTP POST 요청 생성
@@ -952,8 +942,6 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 		return nil, fmt.Errorf("Error reading response (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
 
-	fmt.Println("stompesi - body", body)
-
 	// 응답 JSON 파싱
 	var res JSONRPCResponse
 	err = json.Unmarshal(body, &res)
@@ -962,8 +950,6 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 	}
 
 	time.Sleep(2 * time.Second)
-
-	fmt.Println("stompesi - finalize_block done")
 
 	// res, err = client.JSONRPCCall(sequencerUrlList[sequencerIndex], "get_raw_transaction_list", map[string]interface{}{
 	// 	"rollup_id": f.cfg.RollupId,
@@ -983,8 +969,6 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 		},
 		ID: 1,
 	}
-
-	fmt.Println("stompesi - get_raw_transaction_list", finalize_block_request)
 
 	// 요청을 JSON으로 직렬화
 	finalize_reqBytes, err = json.Marshal(finalize_block_request)
@@ -1012,8 +996,6 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Error reading response (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
-
-	fmt.Println("stompesi - body", body)
 
 	// 응답 JSON 파싱
 	var res2 JSONRPCResponse
