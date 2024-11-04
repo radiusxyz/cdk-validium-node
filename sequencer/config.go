@@ -93,6 +93,33 @@ type FinalizerCfg struct {
 
 	// Metrics is the config for the sequencer metrics
 	Metrics MetricsCfg `mapstructure:"Metrics"`
+
+	// UseExternalSequencer
+	UseExternalSequencer bool `mapstructure:"UseExternalSequencer"`
+
+	// RollupId
+	RollupId string `mapstructure:"RollupId"`
+
+	// Platform
+	Platform string `mapstructure:"Platform"`
+
+	// Platform Url
+	PlatformUrl string `mapstructure:"PlatformUrl"`
+
+	LivenessContractAddress string `mapstructure:"LivenessContractAddress"`
+	
+	// ServiceType
+	ServiceType string `mapstructure:"ServiceType"`
+
+	// ClusterId
+	ClusterId string `mapstructure:"ClusterId"`
+	
+	// SeedNodeURI is used allow Non-Sequencer nodes
+	// to relay transactions to the Sequencer node
+	SeedNodeURI string `mapstructure:"SeedNodeURI"`
+
+	// SequencerPrivateKey Private key of the trusted sequencer
+	SequencerPrivateKey types.KeystoreFileConfig `mapstructure:"SequencerPrivateKey"`
 }
 
 // MetricsCfg contains the sequencer metrics configuration properties

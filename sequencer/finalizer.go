@@ -19,6 +19,7 @@ import (
 	"github.com/0xPolygonHermez/zkevm-node/state/runtime"
 	"github.com/0xPolygonHermez/zkevm-node/state/runtime/executor"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 const (
@@ -306,6 +307,21 @@ func (f *finalizer) checkL1InfoTreeUpdate(ctx context.Context) {
 	}
 }
 
+func hexToTx(str string) (*types.Transaction, error) {
+	tx := new(types.Transaction)
+
+	b, err := hex.DecodeHex(str)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.UnmarshalBinary(b); err != nil {
+		return nil, err
+	}
+
+	return tx, nil
+}
+
 // finalizeBatches runs the endless loop for processing transactions finalizing batches.
 func (f *finalizer) finalizeBatches(ctx context.Context) {
 	log.Debug("finalizer init loop")
@@ -313,7 +329,15 @@ func (f *finalizer) finalizeBatches(ctx context.Context) {
 	for {
 		// We have reached the L2 block time, we need to close the current L2 block and open a new one
 		if f.wipL2Block.timestamp+uint64(f.cfg.L2BlockMaxDeltaTimestamp.Seconds()) <= uint64(time.Now().Unix()) {
-			f.finalizeWIPL2Block(ctx)
+			err := f.finalizeWIPL2Block(ctx)
+			if err != nil {
+
+				log.Debugf("failed to finalizeWIPL2Block, error: %v", err)
+
+				duration := time.Duration(f.cfg.L2BlockMaxDeltaTimestamp.Seconds() * float64(time.Second))
+				time.Sleep(duration)
+				continue
+			}
 		}
 
 		tx, err := f.workerIntf.GetBestFittingTx(f.wipBatch.imRemainingResources)
