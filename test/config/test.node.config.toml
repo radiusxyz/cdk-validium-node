@@ -121,11 +121,11 @@ StateConsistencyCheckInterval = "5s"
     UseExternalSequencer = true
     RollupId = "rollup_id"
 		Platform = "ethereum"
-    PlatformUrl = "http://192.168.12.195:8545"
-    LivenessContractAddress = "0x70e0bA845a1A0F2DA3359C97E0285013525FFC49"
+    PlatformUrl = "http://192.168.12.141:8545"
+    LivenessContractAddress = "0xf5059a5D33d5853360D16C683c16e67980206f36"
 		ServiceType = "radius"
 		ClusterId = "cluster_id"
-		SeedNodeURI = "http://192.168.12.195:6001"
+		SeedNodeURI = "http://192.168.12.174:6000"
     SequencerPrivateKey = {Path = "/pk/sequencer.keystore", Password = "testonly"}
 	[Sequencer.Finalizer.Metrics]
 		Interval = "60m"
