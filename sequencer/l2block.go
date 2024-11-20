@@ -29,14 +29,14 @@ type GetRawTxListResponse struct {
 }
 
 // SequencerUrl 구조체 정의
-type AddressAndUrls struct {
+type SequencerInfo struct {
 	Address        string `json:"address"`
 	ExternalRpcUrl string `json:"external_rpc_url"`
 	ClusterRpcUrl  string `json:"cluster_rpc_url"`
 }
 
 type GetSequencerRpcUrlListResponse struct {
-	SequencerRrcUrlList []AddressAndUrls `json:"sequencer_rpc_url_list"`
+	SequencerRrcUrlList []SequencerInfo `json:"sequencer_rpc_url_list"`
 }
 
 // L2Block represents a wip or processed L2 block
@@ -719,7 +719,7 @@ func (f *finalizer) dumpL2Block(l2Block *L2Block) {
 	}
 }
 
-func (f *finalizer) GetSequencerUrlList() (uint64, []string, error) {
+func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
 	platformClient, err := ethclient.Dial(f.cfg.PlatformUrl)
 	if err != nil {
 		return 0, nil, err
@@ -862,42 +862,35 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []string, error) {
 		return 0, nil, fmt.Errorf("get raw tx list unmarshal 123 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
 
-	fmt.Println("stompesi - 5", getSequencerRpcUrlListResponse)
-	fmt.Println("stompesi - 5", getSequencerRpcUrlListResponse.SequencerRrcUrlList)
-
-	var sequencer_rpc_url_list []string
-	for _, sequencerRpcUrl := range getSequencerRpcUrlListResponse.SequencerRrcUrlList {
-		fmt.Println("stompesi - sequencerRpcUrl", sequencerRpcUrl)
-		fmt.Println("stompesi - sequencerRpcUrl", sequencerRpcUrl.Address)
-		fmt.Println("stompesi - sequencerRpcUrl", sequencerRpcUrl.ExternalRpcUrl)
-		fmt.Println("stompesi - sequencerRpcUrl", sequencerRpcUrl.ClusterRpcUrl)
-
-		sequencer_rpc_url_list = append(sequencer_rpc_url_list, sequencerRpcUrl.ClusterRpcUrl)
-	}
-
-	fmt.Println("stompesi - 6", sequencer_rpc_url_list)
-	return blockHeight, sequencer_rpc_url_list, nil
+	return blockHeight, getSequencerRpcUrlListResponse.SequencerRrcUrlList, nil
 }
 
 func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
-	blockHeight, sequencerUrlList, err := f.GetSequencerUrlList()
+	blockHeight, sequencerInfoList, err := f.GetSequencerUrlList()
 	if err != nil {
 		return nil, err
 	}
 
 	rollup_block_height := f.wipL2Block.trackingNum + 1
-	sequencerIndex := rollup_block_height % uint64(len(sequencerUrlList))
+	sequencerIndex := rollup_block_height % uint64(len(sequencerInfoList))
 
-	fmt.Println("stompesi - sequencerUrlList", sequencerUrlList, sequencerIndex)
+	for {
+		if sequencerInfoList[sequencerIndex].ClusterRpcUrl == "" {
+			sequencerIndex = (sequencerIndex + 1) % uint64(len(sequencerInfoList))
+		} else {
+			break
+		}
+	}
+	
+	sequencerClusterRpcUrl := sequencerInfoList[sequencerIndex].ClusterRpcUrl
 
-	sequencerRpcUrl := sequencerUrlList[sequencerIndex]
-
-	fmt.Println("stompesi - sequencerRpcUrl", sequencerRpcUrl)
+	fmt.Println("stompesi - sequencerRpcUrl", sequencerClusterRpcUrl)
 
 	// Sign the block request
 	message := map[string]interface{}{
 		"platform":              f.cfg.Platform,
 		"rollup_id":             f.cfg.RollupId,
+		"block_creator_address": 	 	 sequencerInfoList[sequencerIndex].Address,	
 		"executor_address":      f.sequencerAddress,
 		"platform_block_height": blockHeight - 3,
 		"rollup_block_height":   rollup_block_height,
@@ -943,7 +936,7 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 
 	////////////
 	// 새로운 HTTP POST 요청 생성
-	req, err := http.NewRequest("POST", sequencerRpcUrl, bytes.NewBuffer(finalize_reqBytes))
+	req, err := http.NewRequest("POST", sequencerClusterRpcUrl, bytes.NewBuffer(finalize_reqBytes))
 	if err != nil {
 		return nil, fmt.Errorf("Error creating HTTP request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
@@ -1014,7 +1007,7 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 			DisableKeepAlives: true,
 		},
 	}
-	finalize_block_resp, err = client.Post(sequencerRpcUrl, "application/json", bytes.NewBuffer(finalize_reqBytes))
+	finalize_block_resp, err = client.Post(sequencerClusterRpcUrl, "application/json", bytes.NewBuffer(finalize_reqBytes))
 	if err != nil {
 		return nil, fmt.Errorf("Error making JSON-RPC request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
