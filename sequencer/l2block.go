@@ -793,8 +793,6 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
 		}
 	}
 
-	fmt.Println("stompesi - addressStrings", addressStrings)
-
 	// JSON-RPC 요청 데이터 생성
 	request := JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -804,9 +802,6 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
 		},
 		ID: 1,
 	}
-
-	fmt.Println("stompesi - addressStrings", addressStrings)
-	fmt.Println("stompesi - f.cfg.SeedNodeURI", f.cfg.SeedNodeURI)
 
 	// 요청을 JSON으로 직렬화
 	reqBytes, err := json.Marshal(request)
@@ -823,14 +818,11 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
 		},
 	}
 
-	fmt.Println("stompesi - 1")
-
 	req, err := http.NewRequest("POST", f.cfg.SeedNodeURI, bytes.NewBuffer(reqBytes))
 	if err != nil {
 		return 0, nil, fmt.Errorf("Error creating request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
 
-	fmt.Println("stompesi - 2")
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
@@ -841,14 +833,13 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	fmt.Println("stompesi - 3")
+	
 	// 응답 처리
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return 0, nil, fmt.Errorf("Error reading response (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
-
-	fmt.Println("stompesi - 4")
+	
 	// 응답 JSON 파싱
 	var res JSONRPCResponse
 	err = json.Unmarshal(body, &res)
@@ -884,13 +875,21 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 	
 	sequencerClusterRpcUrl := sequencerInfoList[sequencerIndex].ClusterRpcUrl
 
-	fmt.Println("stompesi - sequencerRpcUrl", sequencerClusterRpcUrl)
+	nextSequencerIndex := (sequencerIndex + 1) % uint64(len(sequencerInfoList))
+	for {
+		if sequencerInfoList[nextSequencerIndex].ClusterRpcUrl == "" {
+			nextSequencerIndex = (nextSequencerIndex + 1) % uint64(len(sequencerInfoList))
+		} else {
+			break
+		}
+	}
 
 	// Sign the block request
 	message := map[string]interface{}{
 		"platform":              f.cfg.Platform,
 		"rollup_id":             f.cfg.RollupId,
 		"block_creator_address": 	 	 sequencerInfoList[sequencerIndex].Address,	
+		"next_block_creator_address": sequencerInfoList[nextSequencerIndex].Address,	
 		"executor_address":      f.sequencerAddress,
 		"platform_block_height": blockHeight - 3,
 		"rollup_block_height":   rollup_block_height,
