@@ -119,13 +119,13 @@ StateConsistencyCheckInterval = "5s"
 		SequentialBatchSanityCheck = false
 		SequentialProcessL2Block = true
     UseExternalSequencer = true
-    RollupId = "rollup_id"
+    RollupId = "radius_rollup"
 		Platform = "ethereum"
-    PlatformUrl = "http://34.64.226.211:8545"
-    LivenessContractAddress = "0x84eA74d481Ee0A5332c457a4d796187F6Ba67fEB"
+    PlatformUrl = "https://ethereum-holesky-rpc.publicnode.com"
+    LivenessContractAddress = "0xF05D4533801F921ae57f244EfD15B48f6E60a0ba"
 		ServiceType = "radius"
 		ClusterId = "radius"
-		SeedNodeURI = "http://34.64.226.211:6000"
+		SeedNodeURI = "http://34.47.85.214:6000"
     SequencerPrivateKey = {Path = "/pk/sequencer.keystore", Password = "testonly"}
 	[Sequencer.Finalizer.Metrics]
 		Interval = "60m"
