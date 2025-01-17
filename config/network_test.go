@@ -49,7 +49,7 @@ func TestLoadCustomNetworkConfig(t *testing.T) {
 						"contractName": "PolygonZkEVMGlobalExitRootL2 proxy"
 					},
 					{
-						"balance": "100000000000000000000000",
+						"balance": "10000000000000000000000000000000",
 						"nonce": "2",
 						"address": "0x9d98deabc42dd696deb9e40b4f1cab7ddbf55988",
 						"bytecode": "0xbeef2",
@@ -105,7 +105,7 @@ func TestLoadCustomNetworkConfig(t *testing.T) {
 						{
 							Address: "0x9d98deabc42dd696deb9e40b4f1cab7ddbf55988",
 							Type:    int(merkletree.LeafTypeBalance),
-							Value:   "100000000000000000000000",
+							Value:   "10000000000000000000000000000000",
 						},
 						{
 							Address: "0x9d98deabc42dd696deb9e40b4f1cab7ddbf55988",

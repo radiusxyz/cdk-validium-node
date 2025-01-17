@@ -127,7 +127,7 @@ func TestExecutorUnsignedTransactions(t *testing.T) {
 		{
 			Address: sequencerAddress.Hex(),
 			Type:    int(merkletree.LeafTypeBalance),
-			Value:   "100000000000000000000000",
+			Value:   "10000000000000000000000000000000",
 		},
 	}
 	_, err = testState.SetGenesis(ctx, state.Block{}, test.Genesis, metrics.SynchronizerCallerLabel, dbTx)
@@ -215,17 +215,17 @@ func TestExecutorEstimateGas(t *testing.T) {
 		{
 			Address: "0x617b3a3528F9cDd6630fd3301B9c8911F7Bf063D",
 			Type:    int(merkletree.LeafTypeBalance),
-			Value:   "100000000000000000000000",
+			Value:   "10000000000000000000000000000000",
 		},
 		{
 			Address: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
 			Type:    int(merkletree.LeafTypeBalance),
-			Value:   "100000000000000000000000",
+			Value:   "10000000000000000000000000000000",
 		},
 		{
 			Address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
 			Type:    int(merkletree.LeafTypeBalance),
-			Value:   "100000000000000000000000",
+			Value:   "10000000000000000000000000000000",
 		},
 	}
 
@@ -368,17 +368,17 @@ func TestExecutorGasRefund(t *testing.T) {
 			{
 				Address: "0x617b3a3528F9cDd6630fd3301B9c8911F7Bf063D",
 				Type:    int(merkletree.LeafTypeBalance),
-				Value:   "100000000000000000000000",
+				Value:   "10000000000000000000000000000000",
 			},
 			{
 				Address: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
 				Type:    int(merkletree.LeafTypeBalance),
-				Value:   "100000000000000000000000",
+				Value:   "10000000000000000000000000000000",
 			},
 			{
 				Address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
 				Type:    int(merkletree.LeafTypeBalance),
-				Value:   "100000000000000000000000",
+				Value:   "10000000000000000000000000000000",
 			},
 		},
 	}
@@ -534,17 +534,17 @@ func TestExecutorGasEstimationMultisig(t *testing.T) {
 		{
 			Address: "0x617b3a3528F9cDd6630fd3301B9c8911F7Bf063D",
 			Type:    int(merkletree.LeafTypeBalance),
-			Value:   "100000000000000000000000",
+			Value:   "10000000000000000000000000000000",
 		},
 		{
 			Address: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
 			Type:    int(merkletree.LeafTypeBalance),
-			Value:   "100000000000000000000000",
+			Value:   "10000000000000000000000000000000",
 		},
 		{
 			Address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
 			Type:    int(merkletree.LeafTypeBalance),
-			Value:   "100000000000000000000000",
+			Value:   "10000000000000000000000000000000",
 		},
 	}
 
@@ -882,7 +882,7 @@ func TestExecutorUnsignedTransactionsWithCorrectL2BlockStateRoot(t *testing.T) {
 		{
 			Address: operations.DefaultSequencerAddress,
 			Type:    int(merkletree.LeafTypeBalance),
-			Value:   "100000000000000000000000",
+			Value:   "10000000000000000000000000000000",
 		},
 	}
 	_, err = testState.SetGenesis(ctx, state.Block{}, test.Genesis, metrics.SynchronizerCallerLabel, dbTx)

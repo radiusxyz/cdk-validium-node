@@ -495,7 +495,11 @@ func (f *finalizer) finalizeWIPL2Block(ctx context.Context) error {
 
 		for _, txString := range getRawTxListResponse.RawTransactionList {
 			tx, _ := hexToTx(txString)
-			processBatchResponse, _ := f.stateIntf.PreProcessTransaction(ctx, tx, nil)
+			processBatchResponse, err := f.stateIntf.PreProcessTransaction(ctx, tx, nil)
+
+			if err != nil {
+				continue
+			}
 
 			poolTx := pool.NewTransaction(*tx, "", false)
 			poolTx.ZKCounters = processBatchResponse.UsedZkCounters
@@ -731,27 +735,27 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
 		return 0, nil, err
 	}
 
-	getSequencerListFunctionName := "getSequencerList"
+	getSequencersFunctionName := "getSequencers"
 
 	contractABI, err := abi.JSON(strings.NewReader(`[
 		{
+      "type": "function",
+      "name": "getSequencers",
       "inputs": [
         {
-          "internalType": "string",
           "name": "clusterId",
-          "type": "string"
+          "type": "string",
+          "internalType": "string"
         }
       ],
-      "name": "getSequencerList",
       "outputs": [
         {
-          "internalType": "address[]",
           "name": "",
-          "type": "address[]"
+          "type": "address[]",
+          "internalType": "address[]"
         }
       ],
-      "stateMutability": "view",
-      "type": "function"
+      "stateMutability": "view"
     }
 	]`))
 	if err != nil {
@@ -764,7 +768,7 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
 	fmt.Println("platform", f.cfg.PlatformUrl)
 	fmt.Println("clusterId", f.cfg.ClusterId)
 
-	data, err := contractABI.Pack(getSequencerListFunctionName, f.cfg.ClusterId)
+	data, err := contractABI.Pack(getSequencersFunctionName, f.cfg.ClusterId)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -779,7 +783,7 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
 	}
 
 	var sequencerList []common.Address
-	err = contractABI.UnpackIntoInterface(&sequencerList, getSequencerListFunctionName, result)
+	err = contractABI.UnpackIntoInterface(&sequencerList, getSequencersFunctionName, result)
 	if err != nil {
 		return 0, nil, err
 	}
