@@ -724,6 +724,8 @@ func (f *finalizer) dumpL2Block(l2Block *L2Block) {
 }
 
 func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
+	start := time.Now()
+
 	platformClient, err := ethclient.Dial(f.cfg.PlatformUrl)
 	if err != nil {
 		return 0, nil, err
@@ -763,10 +765,6 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
 	}
 
 	contractAddress := common.HexToAddress(f.cfg.LivenessContractAddress)
-
-	fmt.Println("contract address", contractAddress)
-	fmt.Println("platform", f.cfg.PlatformUrl)
-	fmt.Println("clusterId", f.cfg.ClusterId)
 
 	data, err := contractABI.Pack(getSequencersFunctionName, f.cfg.ClusterId)
 	if err != nil {
@@ -857,11 +855,15 @@ func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
 		return 0, nil, fmt.Errorf("get raw tx list unmarshal 123 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
 
+	elapsed := time.Since(start)
+	fmt.Printf("GetSequencerUrlList: %s\n", elapsed)
+
 	return blockHeight, getSequencerRpcUrlListResponse.SequencerRrcUrlList, nil
 }
 
 func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 	blockHeight, sequencerInfoList, err := f.GetSequencerUrlList()
+	start := time.Now()
 	if err != nil {
 		return nil, err
 	}
@@ -1035,6 +1037,9 @@ func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get raw tx list unmarshal 222222 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
 	}
+
+	elapsed := time.Since(start)
+	fmt.Printf("getRawTxList: %s\n", elapsed)
 
 	return &getRawTxListResponse, nil
 }
