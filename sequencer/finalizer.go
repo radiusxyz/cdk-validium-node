@@ -4,7 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/0xPolygonHermez/zkevm-node/sbbclient"
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"math/big"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +34,14 @@ const (
 
 var (
 	now = time.Now
+)
+
+type Method string
+
+const (
+	FinalizeBlock          Method = "finalize_block"
+	GetRawTransactionList  Method = "get_raw_transaction_list"
+	GetSequencerRpcUrlList Method = "get_sequencer_rpc_url_list"
 )
 
 // finalizer represents the finalizer component of the sequencer.
@@ -64,6 +77,7 @@ type finalizer struct {
 	// pending L2 blocks to store in the state
 	pendingL2BlocksToStore   chan *L2Block
 	pendingL2BlocksToStoreWG *sync.WaitGroup
+	l2BlockReorg             atomic.Bool
 	// L2 block counter for tracking purposes
 	l2BlockCounter uint64
 	// executor flushid control
@@ -79,6 +93,24 @@ type finalizer struct {
 	// stream server
 	streamServer *datastreamer.StreamServer
 	dataToStream chan interface{}
+
+	// sbb
+	sequencerUrls                   []string
+	sequencerAddresses              []string
+	sequencerIndex                  uint64
+	ethClient                       *ethclient.Client
+	sbbClient                       *sbbclient.SbbClient
+	hasBlockFinalizeRefused         bool
+	hasGetRawTransactionListRefused bool
+	platform                        string
+	rollupId                        string
+	executorAddress                 string
+	livenessContractAddress         string
+	clusterId                       string
+	seedNodeUrl                     string
+	l1Url                           string
+	currentFinalizedBlockNumber     uint64
+	currentTxsSettingBlockNumber    uint64
 }
 
 // newFinalizer returns a new instance of Finalizer.
@@ -97,6 +129,11 @@ func newFinalizer(
 	workerReadyTxsCond *timeoutCond,
 	dataToStream chan interface{},
 ) *finalizer {
+	sbbClient := sbbclient.New()
+	ethClient, err := ethclient.Dial("https://ethereum-holesky-rpc.publicnode.com")
+	if err != nil {
+		fmt.Println("ethClient error")
+	}
 	f := finalizer{
 		cfg:              cfg,
 		isSynced:         isSynced,
@@ -137,10 +174,27 @@ func newFinalizer(
 		// stream server
 		streamServer: streamServer,
 		dataToStream: dataToStream,
+
+		// sbb
+		sequencerUrls:                   make([]string, 0, 10),
+		sequencerAddresses:              make([]string, 0, 10),
+		sequencerIndex:                  0,
+		sbbClient:                       sbbClient,
+		ethClient:                       ethClient,
+		hasBlockFinalizeRefused:         false,
+		hasGetRawTransactionListRefused: false,
+		platform:                        cfg.Platform,
+		rollupId:                        cfg.RollupId,
+		executorAddress:                 "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+		livenessContractAddress:         cfg.LivenessContractAddress,
+		clusterId:                       cfg.ClusterId,
+		seedNodeUrl:                     cfg.SeedNodeURI,
+		l1Url:                           cfg.PlatformUrl,
+		currentFinalizedBlockNumber:     1000000000,
+		currentTxsSettingBlockNumber:    1000000000,
 	}
-
+	f.l2BlockReorg.Store(false)
 	f.haltFinalizer.Store(false)
-
 	return &f
 }
 
@@ -170,8 +224,14 @@ func (f *finalizer) Start(ctx context.Context) {
 	// Foced batches checking
 	go f.checkForcedBatches(ctx)
 
-	// Processing transactions and finalizing batches
-	f.finalizeBatches(ctx)
+	if f.cfg.UseExternalSequencer {
+		if err := f.sbbEventLoop(ctx); err != nil {
+			panic("finalize error: " + err.Error())
+		}
+	} else {
+		// Processing transactions and finalizing batches
+		f.finalizeBatches(ctx)
+	}
 }
 
 // updateProverIdAndFlushId updates the prover id and flush id
@@ -322,6 +382,445 @@ func hexToTx(str string) (*types.Transaction, error) {
 	return tx, nil
 }
 
+func (f *finalizer) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
+	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer reqCancel()
+
+	l1HeadNum, err := f.ethClient.BlockNumber(reqCtx)
+	if err != nil {
+		log.Error("failed to fetch l1 head number", "error", err.Error())
+		return nil, err
+	}
+	l1HeadNum -= 6 // SBB가 아직 최신 블록을 가져오지 않았을 수도 있기 때문에 안정성을 위해 마진 -6
+	return &l1HeadNum, nil
+}
+
+func (f *finalizer) setSequencerInfo(ctx context.Context, l1HeadNum uint64) error {
+	addresses, err := f.fetchSequencerAddressList(ctx, l1HeadNum)
+	if err != nil {
+		return err
+	}
+
+	urls, err := f.fetchSequencerRpcUrlList(ctx, addresses)
+	if err != nil {
+		return err
+	}
+
+	index, err := f.getSequencerIndex(urls)
+	if err != nil {
+		return err
+	}
+
+	f.sequencerAddresses = addresses
+	f.sequencerUrls = urls
+	f.sequencerIndex = *index
+	return nil
+}
+
+func (f *finalizer) fetchSequencerAddressList(ctx context.Context, l1HeadNum uint64) ([]string, error) {
+	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer reqCancel()
+
+	contractABI, err := abi.JSON(strings.NewReader(abiString))
+	if err != nil {
+		return nil, err
+	}
+
+	METHOD := "getSequencers"
+	contractAddress := common.HexToAddress(f.livenessContractAddress)
+	data, err := contractABI.Pack(METHOD, f.clusterId)
+	if err != nil {
+		return nil, err
+	}
+
+	query := ethereum.CallMsg{
+		To:   &contractAddress,
+		Data: data,
+	}
+	result, err := f.ethClient.CallContract(reqCtx, query, big.NewInt(int64(l1HeadNum)))
+	if err != nil {
+		log.Error("failed to make a contract call to retrieve the sequencer URL list", "error", err.Error())
+		return nil, err
+	}
+	var sequencerList []common.Address
+	err = contractABI.UnpackIntoInterface(&sequencerList, METHOD, result)
+	if err != nil {
+		return nil, err
+	}
+
+	var addresses []string
+	for _, addr := range sequencerList {
+		if addr != common.HexToAddress("0x0000000000000000000000000000000000000000") {
+			addresses = append(addresses, addr.Hex())
+		}
+	}
+	return addresses, nil
+}
+
+func (f *finalizer) fetchSequencerRpcUrlList(ctx context.Context, addresses []string) ([]string, error) {
+	params := GetSequencerRpcUrlsParams{
+		SequencerAddresses: addresses,
+	}
+	body := newJsonRpcRequest(GetSequencerRpcUrlList, params)
+
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	res := &GetSequencerRpcUrlsResponse{}
+	if err := f.sbbClient.Send(ctx, f.seedNodeUrl, body, res); err != nil {
+		log.Error("failed to send get_sequencer_rpc_url_list request to seeder node", "error", err.Error())
+		return nil, err
+	}
+	var urls []string
+	for _, sequencer := range res.SequencerRrcUrls {
+		if sequencer.ClusterRpcUrl != "" {
+			urls = append(urls, sequencer.ClusterRpcUrl)
+		}
+	}
+	return urls, nil
+}
+
+func (f *finalizer) getSequencerIndex(urls []string) (*uint64, error) {
+	blockNum := f.wipL2Block.trackingNum
+	if len(urls) < 1 {
+		return nil, errors.New("there are no URLs available, making modular arithmetic impossible")
+	}
+	mod := blockNum % uint64(len(urls))
+	return &mod, nil
+}
+
+func (f *finalizer) hasSBBRefused() bool {
+	if f.hasBlockFinalizeRefused || f.hasGetRawTransactionListRefused {
+		return true
+	}
+	return false
+}
+
+func (s *finalizer) getNextSequencerIndex(index uint64) (*uint64, error) {
+	length := len(s.sequencerUrls)
+	if length < 1 {
+		return nil, errors.New("cannot divide by zero")
+	}
+	nextIndex := (index + 1) % uint64(length)
+	return &nextIndex, nil
+}
+
+func (s *finalizer) increaseSequencerIndex() error {
+	length := len(s.sequencerUrls)
+	if length < 1 {
+		return errors.New("cannot divide by zero")
+	}
+	s.sequencerIndex = (s.sequencerIndex + 1) % uint64(length)
+	return nil
+}
+
+func (s *finalizer) process(ctx context.Context, l1HeadNum uint64) error {
+	if err := s.processTransactions(ctx); err != nil {
+		return err
+	}
+
+	if !s.hasSBBRefused() {
+		if err := s.setSequencerInfo(ctx, l1HeadNum); err != nil {
+			return errors.New("failed to update sequencer info")
+		}
+	}
+
+	if err := s.finalizeBlock(l1HeadNum); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *finalizer) finalizeBlock(l1HeadNum uint64) error {
+	targetNum := s.wipL2Block.trackingNum + 1
+	if targetNum == 0 {
+		targetNum = s.wipL2Block.trackingNum + 2
+	}
+
+	nextSequencerIndex, err := s.getNextSequencerIndex(s.sequencerIndex)
+	if err != nil {
+		return err
+	}
+
+	message := FinalizeBlockMessageParams{
+		Platform:                s.platform,
+		RollupId:                s.rollupId,
+		ExecutorAddress:         s.executorAddress,
+		NextBlockCreatorAddress: s.sequencerAddresses[*nextSequencerIndex],
+		BlockCreatorAddress:     s.sequencerAddresses[s.sequencerIndex],
+		PlatformBlockHeight:     l1HeadNum,
+		RollupBlockHeight:       targetNum,
+	}
+	params := FinalizeBlockParams{
+		Message:   message,
+		Signature: "",
+	}
+
+	body := newJsonRpcRequest(FinalizeBlock, params)
+
+	//0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err = s.sbbClient.Send(ctx, s.sequencerUrls[s.sequencerIndex], body, nil); err != nil {
+		if strings.Contains(err.Error(), "connection refused") {
+			s.hasBlockFinalizeRefused = true
+			return err
+		}
+		return fmt.Errorf("failed to send finalize_block request to SBB: %s request params: platformHeight %d rollupHeight %d url %s now %d", err.Error(), message.PlatformBlockHeight, message.RollupBlockHeight, s.sequencerUrls[s.sequencerIndex], time.Now().UnixMilli())
+	}
+
+	s.hasBlockFinalizeRefused = false
+	//s.ResetFinishedNewPayload()
+	s.currentFinalizedBlockNumber = targetNum
+
+	fmt.Println(log.Blue+"Successfully finalized the contents to be included in the block. ", "block num: ", targetNum, " now: ", time.Now().UnixMilli())
+	return nil
+}
+
+func (s *finalizer) processTransactions(ctx context.Context) error {
+	if s.currentTxsSettingBlockNumber == s.currentFinalizedBlockNumber {
+		fmt.Println(log.Blue + "the transactions are already set up")
+		return nil
+	}
+
+	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer reqCancel()
+
+	blockNum := s.currentFinalizedBlockNumber
+	txs, err := s.getRawTransactionList(reqCtx, blockNum)
+	fmt.Println(log.Blue+"txscount: ", len(txs))
+	if err != nil {
+		return err
+	}
+	if len(txs) > 0 {
+		if err = s.submitRawTransactions(ctx, txs); err != nil {
+			return fmt.Errorf("failed to add the transactions to the transaction pool: %s", err.Error())
+		}
+	}
+	s.currentTxsSettingBlockNumber = blockNum
+
+	fmt.Println(log.Blue+"Transaction processing succeeded.", "tx count: ", len(txs), " block num: ", blockNum, " now: ", time.Now().UnixMilli())
+	return nil
+}
+
+func (f *finalizer) submitRawTransactions(ctx context.Context, txs types.Transactions) error {
+	for _, tx := range txs {
+		processBatchResponse, err := f.stateIntf.PreProcessTransaction(ctx, tx, nil)
+
+		if err != nil {
+			continue
+		}
+
+		poolTx := pool.NewTransaction(*tx, "", false)
+		poolTx.ZKCounters = processBatchResponse.UsedZkCounters
+		poolTx.ReservedZKCounters = processBatchResponse.ReservedZkCounters
+
+		txTracker, _ := f.workerIntf.NewTxTracker(poolTx.Transaction, poolTx.ZKCounters, poolTx.ReservedZKCounters, poolTx.IP)
+
+		firstTxProcess := true
+
+		for {
+			var err error
+			_, err = f.processTransaction(ctx, txTracker, firstTxProcess)
+			if err != nil {
+				if err == ErrEffectiveGasPriceReprocess {
+					firstTxProcess = false
+					log.Infof("reprocessing tx %s because of effective gas price calculation", txTracker.HashStr)
+					continue
+				} else if err == ErrBatchResourceOverFlow {
+					log.Infof("skipping tx %s due to a batch resource overflow", txTracker.HashStr)
+					break
+				} else {
+					log.Errorf("failed to process tx %s, error: %v", err)
+					break
+				}
+			}
+			break
+		}
+	}
+	return nil
+}
+
+func (s *finalizer) getRawTransactionList(ctx context.Context, blockNum uint64) (types.Transactions, error) {
+	params := GetRawTransactionsParams{
+		RollupId:          s.rollupId,
+		RollupBlockHeight: blockNum,
+	}
+	body := newJsonRpcRequest(GetRawTransactionList, params)
+	res := &GetRawTransactionsResponse{}
+	if err := s.sbbClient.Send(ctx, s.sequencerUrls[s.sequencerIndex], body, res); err != nil {
+		if strings.Contains(err.Error(), "connection refused") {
+			s.hasGetRawTransactionListRefused = true
+		} else {
+			return nil, fmt.Errorf("failed to send get_raw_transaction_list request to SBB: %s height %d url %s now %d", err.Error(), params.RollupBlockHeight, s.sequencerUrls[s.sequencerIndex], time.Now().UnixMilli())
+		}
+		return nil, err
+	}
+	s.hasGetRawTransactionListRefused = false
+
+	var txs []*types.Transaction
+	for _, hexString := range res.RawTransactions {
+		tx, _ := hexToTx(hexString)
+		txs = append(txs, tx)
+	}
+	return txs, nil
+}
+
+// finalizeBatches runs the endless loop for processing transactions finalizing batches.
+func (f *finalizer) sbbEventLoop(ctx context.Context) error {
+	log.Debug("finalizer init sbb event loop")
+	showNotFoundTxLog := true // used to log debug only the first message when there is no txs to process
+
+	l1HeadNum, err := f.fetchL1HeadNum(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err = f.setSequencerInfo(ctx, *l1HeadNum); err != nil {
+		return err
+	}
+
+	for i := 0; i < len(f.sequencerUrls); i++ {
+		if err = f.finalizeBlock(*l1HeadNum); err != nil {
+			if strings.Contains(err.Error(), "connection refused") {
+				log.Warn("failed to initial finalizing due to no sequencer found. retrying with a different sequencer")
+				if err = f.increaseSequencerIndex(); err != nil {
+					return err
+				}
+				if i == len(f.sequencerUrls)-1 {
+					panic("no sequencer")
+				}
+				continue
+			}
+			return err
+		}
+		break
+	}
+
+	LOOPTIME := f.cfg.L2BlockMaxDeltaTimestamp.Milliseconds()
+	flag := false
+	for {
+		startTime := time.Now().UnixMilli()
+		fmt.Println("wip num: ", f.wipL2Block.trackingNum, " wip timestamp: ", f.wipL2Block.timestamp, " now: ", time.Now().Unix())
+		// We have reached the L2 block time, we need to close the current L2 block and open a new one
+		if flag || f.wipL2Block.createdAt.Add(f.cfg.L2BlockMaxDeltaTimestamp.Duration).Before(time.Now()) {
+			flag = false
+			fmt.Println(log.Blue+"start time: ", startTime)
+			l1HeadNum, err := f.fetchL1HeadNum(ctx)
+			if err != nil {
+				log.Error("failed to fetch l1 head", "error", err.Error())
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+
+			for i := 0; i < len(f.sequencerUrls); i++ {
+				if err = f.process(ctx, *l1HeadNum); err != nil {
+					if strings.Contains(err.Error(), "connection refused") {
+						log.Warn("failed to processing due to no sequencer found. retrying with a different sequencer", "error", err.Error(), " url: ", f.sequencerUrls[f.sequencerIndex])
+						if i == len(f.sequencerUrls)-1 {
+							panic("no sequencer")
+						}
+						if err = f.increaseSequencerIndex(); err != nil {
+							fmt.Println(err.Error())
+						}
+						continue
+					}
+					fmt.Println(log.Yellow+"something soft error: ", err.Error(), " i:", i)
+					if strings.Contains(err.Error(), "NoneType") {
+						panic("NoneType!!")
+					}
+				}
+				break
+			}
+
+			prevTimestamp := f.wipL2Block.timestamp
+			prevL1InfoTreeIndex := f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex
+			f.closeWIPL2Block(ctx)
+			f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
+		}
+
+		tx, err := f.workerIntf.GetBestFittingTx(f.wipBatch.imRemainingResources)
+
+		// If we have txs pending to process but none of them fits into the wip batch, we close the wip batch and open a new one
+		if err == ErrNoFittingTransaction {
+			f.finalizeWIPBatch(ctx, state.NoTxFitsClosingReason)
+			continue
+		}
+
+		if tx != nil {
+			fmt.Println(log.Blue + "tx is nil")
+			showNotFoundTxLog = true
+
+			firstTxProcess := true
+
+			for {
+				var err error
+				_, err = f.processTransaction(ctx, tx, firstTxProcess)
+				if err != nil {
+					if err == ErrEffectiveGasPriceReprocess {
+						firstTxProcess = false
+						log.Infof("reprocessing tx %s because of effective gas price calculation", tx.HashStr)
+						continue
+					} else if err == ErrBatchResourceOverFlow {
+						log.Infof("skipping tx %s due to a batch resource overflow", tx.HashStr)
+						break
+					} else {
+						log.Errorf("failed to process tx %s, error: %v", err)
+						break
+					}
+				}
+				break
+			}
+		} else {
+			fmt.Println("tx is not nil")
+			idleTime := time.Now()
+
+			if showNotFoundTxLog {
+				log.Debug("no transactions to be processed. Waiting...")
+				showNotFoundTxLog = false
+			}
+
+			endTime := time.Now().UnixMilli()
+			duration := endTime - startTime
+			fmt.Println(log.Blue+"duration: ", duration)
+			var nextActionDelay time.Duration
+			if LOOPTIME-duration > 0 {
+				nextActionDelay = time.Duration(LOOPTIME - duration)
+			} else {
+				nextActionDelay = time.Duration(0)
+			}
+			// wait for new ready txs in worker
+			f.workerReadyTxsCond.L.Lock()
+			//f.workerReadyTxsCond.WaitOrTimeout(f.cfg.NewTxsWaitInterval.Duration)
+			f.workerReadyTxsCond.WaitOrTimeout(nextActionDelay * time.Millisecond)
+			f.workerReadyTxsCond.L.Unlock()
+
+			// Increase idle time of the WIP L2Block
+			f.wipL2Block.metrics.idleTime += time.Since(idleTime)
+
+			flag = true
+		}
+
+		if f.haltFinalizer.Load() {
+			// There is a fatal error and we need to halt the finalizer and stop processing new txs
+			for {
+				time.Sleep(5 * time.Second) //nolint:gomnd
+			}
+		}
+
+		// Check if we must finalize the batch due to a closing reason (resources exhausted, max txs, timestamp resolution, forced batches deadline)
+		if finalize, closeReason := f.checkIfFinalizeBatch(); finalize {
+			f.finalizeWIPBatch(ctx, closeReason)
+		}
+
+		if err := ctx.Err(); err != nil {
+			log.Errorf("stopping finalizer because of context, error: %v", err)
+			return err
+		}
+	}
+}
+
 // finalizeBatches runs the endless loop for processing transactions finalizing batches.
 func (f *finalizer) finalizeBatches(ctx context.Context) {
 	log.Debug("finalizer init loop")
@@ -329,15 +828,7 @@ func (f *finalizer) finalizeBatches(ctx context.Context) {
 	for {
 		// We have reached the L2 block time, we need to close the current L2 block and open a new one
 		if f.wipL2Block.timestamp+uint64(f.cfg.L2BlockMaxDeltaTimestamp.Seconds()) <= uint64(time.Now().Unix()) {
-			err := f.finalizeWIPL2Block(ctx)
-			if err != nil {
-
-				log.Debugf("failed to finalizeWIPL2Block, error: %v", err)
-
-				duration := time.Duration(f.cfg.L2BlockMaxDeltaTimestamp.Seconds() * float64(time.Second))
-				time.Sleep(duration)
-				continue
-			}
+			f.finalizeWIPL2Block(ctx)
 		}
 
 		tx, err := f.workerIntf.GetBestFittingTx(f.wipBatch.imRemainingResources)
@@ -406,6 +897,48 @@ func (f *finalizer) finalizeBatches(ctx context.Context) {
 		}
 	}
 }
+
+//func (f *finalizer) postProcess(ctx context.Context, txs []*types.Transaction) error {
+//	prevTimestamp := f.wipL2Block.timestamp
+//	prevL1InfoTreeIndex := f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex
+//	for _, tx := range txs {
+//		processBatchResponse, err := f.stateIntf.PreProcessTransaction(ctx, tx, nil)
+//		if err != nil {
+//			continue
+//		}
+//
+//		poolTx := pool.NewTransaction(*tx, "", false)
+//		poolTx.ZKCounters = processBatchResponse.UsedZkCounters
+//		poolTx.ReservedZKCounters = processBatchResponse.ReservedZkCounters
+//
+//		txTracker, _ := f.workerIntf.NewTxTracker(poolTx.Transaction, poolTx.ZKCounters, poolTx.ReservedZKCounters, poolTx.IP)
+//
+//		firstTxProcess := true
+//
+//		for {
+//			var err error
+//			_, err = f.processTransaction(ctx, txTracker, firstTxProcess)
+//			if err != nil {
+//				if err == ErrEffectiveGasPriceReprocess {
+//					firstTxProcess = false
+//					log.Infof("reprocessing tx %s because of effective gas price calculation", txTracker.HashStr)
+//					continue
+//				} else if err == ErrBatchResourceOverFlow {
+//					log.Infof("skipping tx %s due to a batch resource overflow", txTracker.HashStr)
+//					break
+//				} else {
+//					log.Errorf("failed to process tx %s, error: %v", err)
+//					break
+//				}
+//			}
+//			break
+//		}
+//	}
+//
+//	f.closeWIPL2Block(ctx)
+//	f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
+//	return nil
+//}
 
 // processTransaction processes a single transaction.
 func (f *finalizer) processTransaction(ctx context.Context, tx *TxTracker, firstTxProcess bool) (errWg *sync.WaitGroup, err error) {
@@ -852,3 +1385,79 @@ func (f *finalizer) LogEvent(ctx context.Context, level event.Level, eventId eve
 		log.Errorf("error storing log event, error: %v", eventErr)
 	}
 }
+
+type JSONRPCRequest[T any] struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  T      `json:"params"`
+	ID      int    `json:"id"`
+}
+
+func newJsonRpcRequest[T any](method Method, params T) JSONRPCRequest[T] {
+	return JSONRPCRequest[T]{
+		JSONRPC: "2.0",
+		Method:  string(method),
+		Params:  params,
+		ID:      1,
+	}
+}
+
+type GetSequencerRpcUrlsParams struct {
+	SequencerAddresses []string `json:"sequencer_address_list"`
+}
+
+type SequencerRpcUrl struct {
+	Address        string `json:"address"`
+	ExternalRpcUrl string `json:"external_rpc_url"`
+	ClusterRpcUrl  string `json:"cluster_rpc_url"`
+}
+
+type GetSequencerRpcUrlsResponse struct {
+	SequencerRrcUrls []SequencerRpcUrl `json:"sequencer_rpc_url_list"`
+}
+
+type FinalizeBlockMessageParams struct {
+	Platform                string `json:"platform"`
+	RollupId                string `json:"rollup_id"`
+	ExecutorAddress         string `json:"executor_address"`
+	BlockCreatorAddress     string `json:"block_creator_address"`
+	NextBlockCreatorAddress string `json:"next_block_creator_address"`
+	PlatformBlockHeight     uint64 `json:"platform_block_height"`
+	RollupBlockHeight       uint64 `json:"rollup_block_height"`
+}
+
+type FinalizeBlockParams struct {
+	Message   FinalizeBlockMessageParams `json:"message"`
+	Signature string                     `json:"signature"`
+}
+
+type GetRawTransactionsParams struct {
+	RollupId          string `json:"rollup_id"`
+	RollupBlockHeight uint64 `json:"rollup_block_height"`
+}
+
+type GetRawTransactionsResponse struct {
+	RawTransactions []string `json:"raw_transaction_list"`
+}
+
+var abiString string = `[
+		{
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "clusterId",
+          "type": "string"
+        }
+      ],
+      "name": "getSequencers",
+      "outputs": [
+        {
+          "internalType": "address[]",
+          "name": "",
+          "type": "address[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+	]`

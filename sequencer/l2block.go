@@ -1,14 +1,8 @@
 package sequencer
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"math/big"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/0xPolygonHermez/zkevm-node/event"
@@ -18,10 +12,7 @@ import (
 	"github.com/0xPolygonHermez/zkevm-node/state"
 	stateMetrics "github.com/0xPolygonHermez/zkevm-node/state/metrics"
 	"github.com/0xPolygonHermez/zkevm-node/state/runtime/executor"
-	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 type GetRawTxListResponse struct {
@@ -468,71 +459,15 @@ func (f *finalizer) storeL2Block(ctx context.Context, l2Block *L2Block) error {
 }
 
 // finalizeWIPL2Block closes the wip L2 block and opens a new one
-func (f *finalizer) finalizeWIPL2Block(ctx context.Context) error {
-	log.Debugf("finalizing WIP L2 block [%d]", f.wipL2Block.trackingNum)
+func (f *finalizer) finalizeWIPL2Block(ctx context.Context) {
+	log.Debugf("finalizing wip L2 block [%d]", f.wipL2Block.trackingNum)
 
 	prevTimestamp := f.wipL2Block.timestamp
 	prevL1InfoTreeIndex := f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex
 
-	if !f.cfg.UseExternalSequencer {
-		f.closeWIPL2Block(ctx)
+	f.closeWIPL2Block(ctx)
 
-		f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
-	} else {
-		blockHeight, sequencerUrlList, err := f.GetSequencerUrlList()
-
-		fmt.Println("blockHeight, sequencerUrlList", blockHeight, sequencerUrlList)
-
-		if err != nil {
-			return err
-		}
-
-		getRawTxListResponse, err := f.getRawTxList()
-
-		if err != nil {
-			return err
-		}
-
-		for _, txString := range getRawTxListResponse.RawTransactionList {
-			tx, _ := hexToTx(txString)
-			processBatchResponse, err := f.stateIntf.PreProcessTransaction(ctx, tx, nil)
-
-			if err != nil {
-				continue
-			}
-
-			poolTx := pool.NewTransaction(*tx, "", false)
-			poolTx.ZKCounters = processBatchResponse.UsedZkCounters
-			poolTx.ReservedZKCounters = processBatchResponse.ReservedZkCounters
-
-			txTracker, _ := f.workerIntf.NewTxTracker(poolTx.Transaction, poolTx.ZKCounters, poolTx.ReservedZKCounters, poolTx.IP)
-
-			firstTxProcess := true
-
-			for {
-				var err error
-				_, err = f.processTransaction(ctx, txTracker, firstTxProcess)
-				if err != nil {
-					if err == ErrEffectiveGasPriceReprocess {
-						firstTxProcess = false
-						log.Infof("reprocessing tx %s because of effective gas price calculation", txTracker.HashStr)
-						continue
-					} else if err == ErrBatchResourceOverFlow {
-						log.Infof("skipping tx %s due to a batch resource overflow", txTracker.HashStr)
-						break
-					} else {
-						log.Errorf("failed to process tx %s, error: %v", err)
-						break
-					}
-				}
-				break
-			}
-		}
-		f.closeWIPL2Block(ctx)
-		f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
-	}
-
-	return nil
+	f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
 }
 
 // closeWIPL2Block closes the wip L2 block
@@ -723,347 +658,345 @@ func (f *finalizer) dumpL2Block(l2Block *L2Block) {
 	}
 }
 
-func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
-	start := time.Now()
+//func (f *finalizer) GetSequencerUrlList() (uint64, []SequencerInfo, error) {
+//	start := time.Now()
+//
+//	platformClient, err := ethclient.Dial(f.cfg.PlatformUrl)
+//	if err != nil {
+//		return 0, nil, err
+//	}
+//	defer platformClient.Close()
+//
+//	blockHeight, err := platformClient.BlockNumber(context.Background())
+//	if err != nil {
+//		return 0, nil, err
+//	}
+//
+//	getSequencersFunctionName := "getSequencers"
+//
+//	contractABI, err := abi.JSON(strings.NewReader(`[
+//		{
+//      "type": "function",
+//      "name": "getSequencers",
+//      "inputs": [
+//        {
+//          "name": "clusterId",
+//          "type": "string",
+//          "internalType": "string"
+//        }
+//      ],
+//      "outputs": [
+//        {
+//          "name": "",
+//          "type": "address[]",
+//          "internalType": "address[]"
+//        }
+//      ],
+//      "stateMutability": "view"
+//    }
+//	]`))
+//	if err != nil {
+//		return 0, nil, err
+//	}
+//
+//	contractAddress := common.HexToAddress(f.cfg.LivenessContractAddress)
+//
+//	data, err := contractABI.Pack(getSequencersFunctionName, f.cfg.ClusterId)
+//	if err != nil {
+//		return 0, nil, err
+//	}
+//
+//	query := ethereum.CallMsg{
+//		To:   &contractAddress,
+//		Data: data,
+//	}
+//	result, err := platformClient.CallContract(context.Background(), query, big.NewInt(int64(blockHeight)))
+//	if err != nil {
+//		return 0, nil, err
+//	}
+//
+//	var sequencerList []common.Address
+//	err = contractABI.UnpackIntoInterface(&sequencerList, getSequencersFunctionName, result)
+//	if err != nil {
+//		return 0, nil, err
+//	}
+//
+//	fmt.Println("stompesi - sequencerList", sequencerList)
+//
+//	var addressStrings []string
+//	for _, addr := range sequencerList {
+//		if addr != common.HexToAddress("0x0000000000000000000000000000000000000000") {
+//			addressStrings = append(addressStrings, addr.Hex())
+//		}
+//	}
+//
+//	// JSON-RPC 요청 데이터 생성
+//	request := JSONRPCRequest{
+//		JSONRPC: "2.0",
+//		Method:  "get_sequencer_rpc_url_list",
+//		Params: map[string]interface{}{
+//			"sequencer_address_list": addressStrings,
+//		},
+//		ID: 1,
+//	}
+//
+//	// 요청을 JSON으로 직렬화
+//	reqBytes, err := json.Marshal(request)
+//	if err != nil {
+//		return 0, nil, fmt.Errorf("Error marshaling request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	// HTTP 클라이언트 생성 및 요청 전송
+//	client := &http.Client{
+//		Timeout: time.Second * 10,
+//		Transport: &http.Transport{
+//			Proxy:             http.ProxyFromEnvironment,
+//			DisableKeepAlives: true,
+//		},
+//	}
+//
+//	req, err := http.NewRequest("POST", f.cfg.SeedNodeURI, bytes.NewBuffer(reqBytes))
+//	if err != nil {
+//		return 0, nil, fmt.Errorf("Error creating request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	req.Header.Set("Content-Type", "application/json")
+//	req.Header.Set("Cache-Control", "no-cache")
+//
+//	resp, err := client.Do(req)
+//	if err != nil {
+//		return 0, nil, fmt.Errorf("Error making JSON-RPC request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//	defer resp.Body.Close()
+//
+//	// 응답 처리
+//	body, err := ioutil.ReadAll(resp.Body)
+//	if err != nil {
+//		return 0, nil, fmt.Errorf("Error reading response (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	// 응답 JSON 파싱
+//	var res JSONRPCResponse
+//	err = json.Unmarshal(body, &res)
+//	if err != nil {
+//		return 0, nil, fmt.Errorf("get raw tx list unmarshal 234error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	var getSequencerRpcUrlListResponse GetSequencerRpcUrlListResponse
+//	err = json.Unmarshal(res.Result, &getSequencerRpcUrlListResponse)
+//	if err != nil {
+//		return 0, nil, fmt.Errorf("get raw tx list unmarshal 123 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	elapsed := time.Since(start)
+//	fmt.Printf("GetSequencerUrlList: %s\n", elapsed)
+//
+//	return blockHeight, getSequencerRpcUrlListResponse.SequencerRrcUrlList, nil
+//}
 
-	platformClient, err := ethclient.Dial(f.cfg.PlatformUrl)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer platformClient.Close()
-
-	blockHeight, err := platformClient.BlockNumber(context.Background())
-	if err != nil {
-		return 0, nil, err
-	}
-
-	getSequencersFunctionName := "getSequencers"
-
-	contractABI, err := abi.JSON(strings.NewReader(`[
-		{
-      "type": "function",
-      "name": "getSequencers",
-      "inputs": [
-        {
-          "name": "clusterId",
-          "type": "string",
-          "internalType": "string"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "",
-          "type": "address[]",
-          "internalType": "address[]"
-        }
-      ],
-      "stateMutability": "view"
-    }
-	]`))
-	if err != nil {
-		return 0, nil, err
-	}
-
-	contractAddress := common.HexToAddress(f.cfg.LivenessContractAddress)
-
-	data, err := contractABI.Pack(getSequencersFunctionName, f.cfg.ClusterId)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	query := ethereum.CallMsg{
-		To:   &contractAddress,
-		Data: data,
-	}
-	result, err := platformClient.CallContract(context.Background(), query, big.NewInt(int64(blockHeight)))
-	if err != nil {
-		return 0, nil, err
-	}
-
-	var sequencerList []common.Address
-	err = contractABI.UnpackIntoInterface(&sequencerList, getSequencersFunctionName, result)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	fmt.Println("stompesi - sequencerList", sequencerList)
-
-	var addressStrings []string
-	for _, addr := range sequencerList {
-		if addr != common.HexToAddress("0x0000000000000000000000000000000000000000") {
-			addressStrings = append(addressStrings, addr.Hex())
-		}
-	}
-
-	// JSON-RPC 요청 데이터 생성
-	request := JSONRPCRequest{
-		JSONRPC: "2.0",
-		Method:  "get_sequencer_rpc_url_list",
-		Params: map[string]interface{}{
-			"sequencer_address_list": addressStrings,
-		},
-		ID: 1,
-	}
-
-	// 요청을 JSON으로 직렬화
-	reqBytes, err := json.Marshal(request)
-	if err != nil {
-		return 0, nil, fmt.Errorf("Error marshaling request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	// HTTP 클라이언트 생성 및 요청 전송
-	client := &http.Client{
-		Timeout: time.Second * 10,
-		Transport: &http.Transport{
-			Proxy:             http.ProxyFromEnvironment,
-			DisableKeepAlives: true,
-		},
-	}
-
-	req, err := http.NewRequest("POST", f.cfg.SeedNodeURI, bytes.NewBuffer(reqBytes))
-	if err != nil {
-		return 0, nil, fmt.Errorf("Error creating request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Cache-Control", "no-cache")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, nil, fmt.Errorf("Error making JSON-RPC request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-	defer resp.Body.Close()
-
-	
-	// 응답 처리
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return 0, nil, fmt.Errorf("Error reading response (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-	
-	// 응답 JSON 파싱
-	var res JSONRPCResponse
-	err = json.Unmarshal(body, &res)
-	if err != nil {
-		return 0, nil, fmt.Errorf("get raw tx list unmarshal 234error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	var getSequencerRpcUrlListResponse GetSequencerRpcUrlListResponse
-	err = json.Unmarshal(res.Result, &getSequencerRpcUrlListResponse)
-	if err != nil {
-		return 0, nil, fmt.Errorf("get raw tx list unmarshal 123 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	elapsed := time.Since(start)
-	fmt.Printf("GetSequencerUrlList: %s\n", elapsed)
-
-	return blockHeight, getSequencerRpcUrlListResponse.SequencerRrcUrlList, nil
-}
-
-func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
-	blockHeight, sequencerInfoList, err := f.GetSequencerUrlList()
-	start := time.Now()
-	if err != nil {
-		return nil, err
-	}
-
-	rollup_block_height := f.wipL2Block.trackingNum + 1
-	sequencerIndex := rollup_block_height % uint64(len(sequencerInfoList))
-
-	for {
-		if sequencerInfoList[sequencerIndex].ClusterRpcUrl == "" {
-			sequencerIndex = (sequencerIndex + 1) % uint64(len(sequencerInfoList))
-		} else {
-			break
-		}
-	}
-	
-	sequencerClusterRpcUrl := sequencerInfoList[sequencerIndex].ClusterRpcUrl
-
-	nextSequencerIndex := (sequencerIndex + 1) % uint64(len(sequencerInfoList))
-	for {
-		if sequencerInfoList[nextSequencerIndex].ClusterRpcUrl == "" {
-			nextSequencerIndex = (nextSequencerIndex + 1) % uint64(len(sequencerInfoList))
-		} else {
-			break
-		}
-	}
-
-	// Sign the block request
-	message := map[string]interface{}{
-		"platform":              f.cfg.Platform,
-		"rollup_id":             f.cfg.RollupId,
-		"block_creator_address": 	 	 sequencerInfoList[sequencerIndex].Address,	
-		"next_block_creator_address": sequencerInfoList[nextSequencerIndex].Address,	
-		"executor_address":      f.sequencerAddress,
-		"platform_block_height": blockHeight - 3,
-		"rollup_block_height":   rollup_block_height,
-	}
-
-	messageBytes, err := json.Marshal(message)
-	if err != nil {
-		log.Fatalf("Error converting message to bytes: %v", err)
-	}
-
-	fmt.Println("messageBytes", messageBytes)
-
-	// h := signer.Hash(messageBytes)
-	// signature, err := crypto.Sign(messageBytes, f.sequencerPrivateKey)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// res, err := client.JSONRPCCall(sequencerUrlList[sequencerIndex], "finalize_block", map[string]interface{}{
-	// 	"message": message,
-	// 	"signature": make([]interface{}, 0),
-	// })
-	// "signature": [signature],
-
-	// JSON-RPC 요청 데이터 생성
-	finalize_block_request := JSONRPCRequest{
-		JSONRPC: "2.0",
-		Method:  "finalize_block",
-		Params: map[string]interface{}{
-			"message":   message,
-			"signature": "",
-		},
-		ID: 1,
-	}
-
-	fmt.Println("stompesi - finalize_block_request", finalize_block_request)
-
-	// 요청을 JSON으로 직렬화
-	finalize_reqBytes, err := json.Marshal(finalize_block_request)
-	if err != nil {
-		return nil, fmt.Errorf("Error marshaling request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	////////////
-	// 새로운 HTTP POST 요청 생성
-	req, err := http.NewRequest("POST", sequencerClusterRpcUrl, bytes.NewBuffer(finalize_reqBytes))
-	if err != nil {
-		return nil, fmt.Errorf("Error creating HTTP request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	// 헤더 설정 (Cache-Control: no-cache 추가)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Cache-Control", "no-cache") // 캐시 방지
-
-	// HTTP 클라이언트 생성 및 요청 전송
-	client := &http.Client{
-		Timeout: 10 * time.Second, // 타임아웃 10초 설정
-		Transport: &http.Transport{
-			Proxy:             http.ProxyFromEnvironment,
-			DisableKeepAlives: true,
-		},
-	}
-	finalize_block_resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("Error making JSON-RPC request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-	defer finalize_block_resp.Body.Close()
-
-	// 응답 처리
-	body, err := ioutil.ReadAll(finalize_block_resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("Error reading response (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	// 응답 JSON 파싱
-	var res JSONRPCResponse
-	err = json.Unmarshal(body, &res)
-	if err != nil {
-		return nil, fmt.Errorf("get unmarshal 11111 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	time.Sleep(2 * time.Second)
-
-	// res, err = client.JSONRPCCall(sequencerUrlList[sequencerIndex], "get_raw_transaction_list", map[string]interface{}{
-	// 	"rollup_id": f.cfg.RollupId,
-	// 	"rollup_block_height": rollup_block_height,
-	// })
-	// if err != nil {
-	// 	return nil, fmt.Errorf("get_raw_transaction_list RPC error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	// }
-
-	// JSON-RPC 요청 데이터 생성
-	finalize_block_request = JSONRPCRequest{
-		JSONRPC: "2.0",
-		Method:  "get_raw_transaction_list",
-		Params: map[string]interface{}{
-			"rollup_id":           f.cfg.RollupId,
-			"rollup_block_height": rollup_block_height,
-		},
-		ID: 1,
-	}
-
-	// 요청을 JSON으로 직렬화
-	finalize_reqBytes, err = json.Marshal(finalize_block_request)
-	if err != nil {
-		return nil, fmt.Errorf("Error marshaling request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	// HTTP POST 요청 전송
-	client = &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			Proxy:             http.ProxyFromEnvironment,
-			DisableKeepAlives: true,
-		},
-	}
-	finalize_block_resp, err = client.Post(sequencerClusterRpcUrl, "application/json", bytes.NewBuffer(finalize_reqBytes))
-	if err != nil {
-		return nil, fmt.Errorf("Error making JSON-RPC request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	defer finalize_block_resp.Body.Close()
-
-	// 응답 처리
-	body, err = ioutil.ReadAll(finalize_block_resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("Error reading response (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	// 응답 JSON 파싱
-	var res2 JSONRPCResponse
-	err = json.Unmarshal(body, &res2)
-	if err != nil {
-		return nil, fmt.Errorf("get raw tx list unmarshal3333333 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	var getRawTxListResponse GetRawTxListResponse
-	err = json.Unmarshal(res2.Result, &getRawTxListResponse)
-	if err != nil {
-		return nil, fmt.Errorf("get raw tx list unmarshal 222222 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
-	}
-
-	elapsed := time.Since(start)
-	fmt.Printf("getRawTxList: %s\n", elapsed)
-
-	return &getRawTxListResponse, nil
-}
+//func (f *finalizer) getRawTxList() (*GetRawTxListResponse, error) {
+//	blockHeight, sequencerInfoList, err := f.GetSequencerUrlList()
+//	start := time.Now()
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	rollup_block_height := f.wipL2Block.trackingNum + 1
+//	sequencerIndex := rollup_block_height % uint64(len(sequencerInfoList))
+//
+//	for {
+//		if sequencerInfoList[sequencerIndex].ClusterRpcUrl == "" {
+//			sequencerIndex = (sequencerIndex + 1) % uint64(len(sequencerInfoList))
+//		} else {
+//			break
+//		}
+//	}
+//
+//	sequencerClusterRpcUrl := sequencerInfoList[sequencerIndex].ClusterRpcUrl
+//
+//	nextSequencerIndex := (sequencerIndex + 1) % uint64(len(sequencerInfoList))
+//	for {
+//		if sequencerInfoList[nextSequencerIndex].ClusterRpcUrl == "" {
+//			nextSequencerIndex = (nextSequencerIndex + 1) % uint64(len(sequencerInfoList))
+//		} else {
+//			break
+//		}
+//	}
+//
+//	// Sign the block request
+//	message := map[string]interface{}{
+//		"platform":                   f.cfg.Platform,
+//		"rollup_id":                  f.cfg.RollupId,
+//		"block_creator_address":      sequencerInfoList[sequencerIndex].Address,
+//		"next_block_creator_address": sequencerInfoList[nextSequencerIndex].Address,
+//		"executor_address":           f.sequencerAddress,
+//		"platform_block_height":      blockHeight - 3,
+//		"rollup_block_height":        rollup_block_height,
+//	}
+//
+//	messageBytes, err := json.Marshal(message)
+//	if err != nil {
+//		log.Fatalf("Error converting message to bytes: %v", err)
+//	}
+//
+//	fmt.Println("messageBytes", messageBytes)
+//
+//	// h := signer.Hash(messageBytes)
+//	// signature, err := crypto.Sign(messageBytes, f.sequencerPrivateKey)
+//	// if err != nil {
+//	// 	return nil, err
+//	// }
+//
+//	// res, err := client.JSONRPCCall(sequencerUrlList[sequencerIndex], "finalize_block", map[string]interface{}{
+//	// 	"message": message,
+//	// 	"signature": make([]interface{}, 0),
+//	// })
+//	// "signature": [signature],
+//
+//	// JSON-RPC 요청 데이터 생성
+//	finalize_block_request := JSONRPCRequest{
+//		JSONRPC: "2.0",
+//		Method:  "finalize_block",
+//		Params: map[string]interface{}{
+//			"message":   message,
+//			"signature": "",
+//		},
+//		ID: 1,
+//	}
+//
+//	fmt.Println("stompesi - finalize_block_request", finalize_block_request)
+//
+//	// 요청을 JSON으로 직렬화
+//	finalize_reqBytes, err := json.Marshal(finalize_block_request)
+//	if err != nil {
+//		return nil, fmt.Errorf("Error marshaling request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	////////////
+//	// 새로운 HTTP POST 요청 생성
+//	req, err := http.NewRequest("POST", sequencerClusterRpcUrl, bytes.NewBuffer(finalize_reqBytes))
+//	if err != nil {
+//		return nil, fmt.Errorf("Error creating HTTP request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	// 헤더 설정 (Cache-Control: no-cache 추가)
+//	req.Header.Set("Content-Type", "application/json")
+//	req.Header.Set("Cache-Control", "no-cache") // 캐시 방지
+//
+//	// HTTP 클라이언트 생성 및 요청 전송
+//	client := &http.Client{
+//		Timeout: 10 * time.Second, // 타임아웃 10초 설정
+//		Transport: &http.Transport{
+//			Proxy:             http.ProxyFromEnvironment,
+//			DisableKeepAlives: true,
+//		},
+//	}
+//	finalize_block_resp, err := client.Do(req)
+//	if err != nil {
+//		return nil, fmt.Errorf("Error making JSON-RPC request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//	defer finalize_block_resp.Body.Close()
+//
+//	// 응답 처리
+//	body, err := ioutil.ReadAll(finalize_block_resp.Body)
+//	if err != nil {
+//		return nil, fmt.Errorf("Error reading response (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	// 응답 JSON 파싱
+//	var res JSONRPCResponse
+//	err = json.Unmarshal(body, &res)
+//	if err != nil {
+//		return nil, fmt.Errorf("get unmarshal 11111 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	time.Sleep(2 * time.Second)
+//
+//	// res, err = client.JSONRPCCall(sequencerUrlList[sequencerIndex], "get_raw_transaction_list", map[string]interface{}{
+//	// 	"rollup_id": f.cfg.RollupId,
+//	// 	"rollup_block_height": rollup_block_height,
+//	// })
+//	// if err != nil {
+//	// 	return nil, fmt.Errorf("get_raw_transaction_list RPC error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	// }
+//
+//	// JSON-RPC 요청 데이터 생성
+//	finalize_block_request = JSONRPCRequest{
+//		JSONRPC: "2.0",
+//		Method:  "get_raw_transaction_list",
+//		Params: map[string]interface{}{
+//			"rollup_id":           f.cfg.RollupId,
+//			"rollup_block_height": rollup_block_height,
+//		},
+//		ID: 1,
+//	}
+//
+//	// 요청을 JSON으로 직렬화
+//	finalize_reqBytes, err = json.Marshal(finalize_block_request)
+//	if err != nil {
+//		return nil, fmt.Errorf("Error marshaling request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	// HTTP POST 요청 전송
+//	client = &http.Client{
+//		Timeout: 10 * time.Second,
+//		Transport: &http.Transport{
+//			Proxy:             http.ProxyFromEnvironment,
+//			DisableKeepAlives: true,
+//		},
+//	}
+//	finalize_block_resp, err = client.Post(sequencerClusterRpcUrl, "application/json", bytes.NewBuffer(finalize_reqBytes))
+//	if err != nil {
+//		return nil, fmt.Errorf("Error making JSON-RPC request (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	defer finalize_block_resp.Body.Close()
+//
+//	// 응답 처리
+//	body, err = ioutil.ReadAll(finalize_block_resp.Body)
+//	if err != nil {
+//		return nil, fmt.Errorf("Error reading response (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	// 응답 JSON 파싱
+//	var res2 JSONRPCResponse
+//	err = json.Unmarshal(body, &res2)
+//	if err != nil {
+//		return nil, fmt.Errorf("get raw tx list unmarshal3333333 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	var getRawTxListResponse GetRawTxListResponse
+//	err = json.Unmarshal(res2.Result, &getRawTxListResponse)
+//	if err != nil {
+//		return nil, fmt.Errorf("get raw tx list unmarshal 222222 error (block height: [%d] - %v)", f.wipL2Block.trackingNum, err)
+//	}
+//
+//	elapsed := time.Since(start)
+//	fmt.Printf("getRawTxList: %s\n", elapsed)
+//
+//	return &getRawTxListResponse, nil
+//}
 
 ////////////////////
 
-// JSON-RPC 요청 형식 정의
-type JSONRPCRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params"`
-	ID      int         `json:"id"`
-}
-
-// JSON-RPC 응답 형식 정의
-type JSONRPCResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	Result  json.RawMessage `json:"result"`
-	Error   *RPCError       `json:"error,omitempty"`
-	ID      int             `json:"id"`
-}
-
-type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Data    string `json:"data,omitempty"`
-}
+//// JSON-RPC 요청 형식 정의
+//type JSONRPCRequest struct {
+//	JSONRPC string      `json:"jsonrpc"`
+//	Method  string      `json:"method"`
+//	Params  interface{} `json:"params"`
+//	ID      int         `json:"id"`
+//}
+//
+//// JSON-RPC 응답 형식 정의
+//type JSONRPCResponse struct {
+//	JSONRPC string          `json:"jsonrpc"`
+//	Result  json.RawMessage `json:"result"`
+//	Error   *RPCError       `json:"error,omitempty"`
+//	ID      int             `json:"id"`
+//}
+//
+//type RPCError struct {
+//	Code    int    `json:"code"`
+//	Message string `json:"message"`
+//	Data    string `json:"data,omitempty"`
+//}
