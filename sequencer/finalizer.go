@@ -106,7 +106,6 @@ type finalizer struct {
 	rollupId                        string
 	executorAddress                 string
 	livenessContractAddress         string
-	executorAddress                 string
 	clusterId                       string
 	seedNodeUrl                     string
 	l1Url                           string
@@ -556,7 +555,7 @@ func (s *finalizer) finalizeBlock(l1HeadNum uint64) error {
 		Message:   message,
 		Signature: "",
 	}
-
+	fmt.Println("fi message: ", message)
 	body := newJsonRpcRequest(FinalizeBlock, params)
 
 	//0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
@@ -1428,7 +1427,7 @@ type FinalizeBlockMessageParams struct {
 }
 
 type FinalizeBlockParams struct {
-	Message   FinalizeBlockMessageParams `json:"message"`
+	Message   FinalizeBlockMessageParams `json:"finalize_block_message"`
 	Signature string                     `json:"signature"`
 }
 
