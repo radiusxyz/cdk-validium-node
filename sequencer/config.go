@@ -107,13 +107,15 @@ type FinalizerCfg struct {
 	PlatformUrl string `mapstructure:"PlatformUrl"`
 
 	LivenessContractAddress string `mapstructure:"LivenessContractAddress"`
-	
+
+	ExecutorAddress string `mapstructure:"ExecutorAddress"`
+
 	// ServiceType
 	ServiceType string `mapstructure:"ServiceType"`
 
 	// ClusterId
 	ClusterId string `mapstructure:"ClusterId"`
-	
+
 	// SeedNodeURI is used allow Non-Sequencer nodes
 	// to relay transactions to the Sequencer node
 	SeedNodeURI string `mapstructure:"SeedNodeURI"`

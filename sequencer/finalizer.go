@@ -106,6 +106,7 @@ type finalizer struct {
 	rollupId                        string
 	executorAddress                 string
 	livenessContractAddress         string
+	executorAddress                 string
 	clusterId                       string
 	seedNodeUrl                     string
 	l1Url                           string
@@ -185,8 +186,8 @@ func newFinalizer(
 		hasGetRawTransactionListRefused: false,
 		platform:                        cfg.Platform,
 		rollupId:                        cfg.RollupId,
-		executorAddress:                 "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
 		livenessContractAddress:         cfg.LivenessContractAddress,
+		executorAddress:                 cfg.ExecutorAddress,
 		clusterId:                       cfg.ClusterId,
 		seedNodeUrl:                     cfg.SeedNodeURI,
 		l1Url:                           cfg.PlatformUrl,
