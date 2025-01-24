@@ -489,6 +489,7 @@ func (f *finalizer) closeWIPL2Block(ctx context.Context) {
 		f.addPendingL2BlockToProcess(ctx, f.wipL2Block)
 	}
 
+	f.nextFinalizingBlockNumber = f.wipL2Block.batchResponse.BlockResponses[0].BlockNumber + 1
 	f.wipL2Block = nil
 }
 

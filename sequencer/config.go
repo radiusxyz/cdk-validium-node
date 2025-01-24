@@ -108,8 +108,6 @@ type FinalizerCfg struct {
 
 	LivenessContractAddress string `mapstructure:"LivenessContractAddress"`
 
-	ExecutorAddress string `mapstructure:"ExecutorAddress"`
-
 	// ServiceType
 	ServiceType string `mapstructure:"ServiceType"`
 
