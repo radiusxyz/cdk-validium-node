@@ -863,6 +863,11 @@ func (s *State) EstimateGas(transaction *types.Transaction, senderAddress common
 			// If the transaction didn't fail => make this ok value the high end
 			highEnd = mid
 		}
+
+		if totalExecutionTime.Milliseconds() > 1000 {
+			log.Debugf("NODEINFRA-SILICON, stop searching when totalExecutionTime > 1000")
+			break
+		}
 	}
 
 	executions := int64(len(txExecutions))
