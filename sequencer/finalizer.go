@@ -94,18 +94,18 @@ type finalizer struct {
 	dataToStream chan interface{}
 
 	// sbb
-  ethClient                       *ethclient.Client
-	sbbClient                       *sbbclient.SbbClient
-	
-  sequencerRpcUrls                   []string
-	sequencerAddresses              []string
-  leaderSequencerIndex                  uint64
-	
+	ethClient *ethclient.Client
+	sbbClient *sbbclient.SbbClient
+
+	sequencerRpcUrls     []string
+	sequencerAddresses   []string
+	leaderSequencerIndex uint64
+
 	preparedTxsBlockNumber    uint64
 	nextFinalizingBlockNumber uint64
 	finalizedBlockNumber      uint64
-	
-  connectionRefused         bool
+
+	connectionRefused bool
 }
 
 // newFinalizer returns a new instance of Finalizer.
@@ -126,7 +126,7 @@ func newFinalizer(
 ) *finalizer {
 	sbbClient := sbbclient.New()
 	ethClient, _ := ethclient.Dial(cfg.PlatformUrl) // TODO: error handling
-	
+
 	f := finalizer{
 		cfg:              cfg,
 		isSynced:         isSynced,
@@ -169,15 +169,15 @@ func newFinalizer(
 		dataToStream: dataToStream,
 
 		// sbb
-		sbbClient:                       sbbClient,
-		ethClient:                       ethClient,
-		sequencerRpcUrls:                make([]string, 0),
-		sequencerAddresses:              make([]string, 0),
-		leaderSequencerIndex:            0,
-		finalizedBlockNumber:            0, // TODO: check if this is correct
-		nextFinalizingBlockNumber:       0, // TODO: check if this is correct
-		preparedTxsBlockNumber:          0, // TODO: check if this is correct
-		connectionRefused:               false,
+		sbbClient:                 sbbClient,
+		ethClient:                 ethClient,
+		sequencerRpcUrls:          make([]string, 0),
+		sequencerAddresses:        make([]string, 0),
+		leaderSequencerIndex:      0,
+		finalizedBlockNumber:      0, // TODO: check if this is correct
+		nextFinalizingBlockNumber: 0, // TODO: check if this is correct
+		preparedTxsBlockNumber:    0, // TODO: check if this is correct
+		connectionRefused:         false,
 	}
 	f.haltFinalizer.Store(false)
 	return &f
@@ -380,7 +380,7 @@ func (f *finalizer) fetchPlatformBlockNumber(ctx context.Context) (*uint64, erro
 		log.Error("failed to fetch l1 block number", "error", err.Error())
 		return nil, err
 	}
-	
+
 	return &platformBlockNumber, nil
 }
 
@@ -453,7 +453,7 @@ func (f *finalizer) fetchSequencerAddresses(ctx context.Context, platformBlockNu
 func (f *finalizer) fetchSequencerRpcUrls(ctx context.Context, sequencerAddresses []string) ([]string, error) {
 	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
-	
+
 	body := newJsonRpcRequest(GetSequencerRpcUrlList, GetSequencerRpcUrlsParams{
 		SequencerAddresses: sequencerAddresses,
 	})
@@ -477,7 +477,7 @@ func (f *finalizer) fetchSequencerRpcUrls(ctx context.Context, sequencerAddresse
 
 func (f *finalizer) getLeaderSequencerIndex(sequencerRpcUrls []string) (*uint64, error) {
 	blockNumber := f.wipL2Block.trackingNum - 1
-	
+
 	if len(sequencerRpcUrls) < 1 {
 		return nil, errors.New("there are no URLs available, making modular arithmetic impossible")
 	}
@@ -511,94 +511,55 @@ func (f *finalizer) increaseLeaderSequencerIndex() error {
 }
 
 func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint64) error {
-  for i := 0; i < len(f.sequencerRpcUrls); i++ {
-    nextSequencerIndex, err := f.getNextLeaderSequencerIndex(f.leaderSequencerIndex)
-    if err != nil {
-      return err
-    }
+	nextSequencerIndex, err := f.getNextLeaderSequencerIndex(f.leaderSequencerIndex)
+	if err != nil {
+		return err
+	}
 
-    message := FinalizeBlockMessageParams{
-      Platform:                f.cfg.Platform,
-      RollupId:                f.cfg.RollupId,
-      NextBlockCreatorAddress: f.sequencerAddresses[*nextSequencerIndex],
-      BlockCreatorAddress:     f.sequencerAddresses[f.leaderSequencerIndex],
-      PlatformBlockHeight:     platformBlockNumber,
-      RollupBlockHeight:       f.nextFinalizingBlockNumber,
-    }
+	message := FinalizeBlockMessageParams{
+		Platform:                f.cfg.Platform,
+		RollupId:                f.cfg.RollupId,
+		NextBlockCreatorAddress: f.sequencerAddresses[*nextSequencerIndex],
+		BlockCreatorAddress:     f.sequencerAddresses[f.leaderSequencerIndex],
+		PlatformBlockHeight:     platformBlockNumber,
+		RollupBlockHeight:       f.nextFinalizingBlockNumber,
+	}
 
-    params := FinalizeBlockParams{
-      Message:   message,
-      Signature: "",
-    }
-    
-    body := newJsonRpcRequest(FinalizeBlock, params)
+	params := FinalizeBlockParams{
+		Message:   message,
+		Signature: "",
+	}
 
-    reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
-	  defer reqCancel()
+	body := newJsonRpcRequest(FinalizeBlock, params)
 
-    if err = f.sbbClient.Send(reqCtx, f.sequencerRpcUrls[f.leaderSequencerIndex], body, nil); err != nil {
-      
-      // TODO: error handling
-      if strings.Contains(err.Error(), "connection refused") {
-        f.connectionRefused = true
+	for i := 0; i < len(f.sequencerRpcUrls); i++ {
+		reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer reqCancel()
 
-        log.Warn("failed to initial finalizing due to no sequencer found. retrying with a different sequencer")
+		if err = f.sbbClient.Send(reqCtx, f.sequencerRpcUrls[f.leaderSequencerIndex], body, nil); err != nil {
+			if strings.Contains(err.Error(), "connection refused") {
+				f.connectionRefused = true
 
-        if err = f.increaseLeaderSequencerIndex(); err != nil {
-          return err
-        }
+				log.Warn("failed to finalizing due to no sequencer found. retrying with a different sequencer")
 
-        continue
-      }
+				if err = f.increaseLeaderSequencerIndex(); err != nil {
+					return err
+				}
 
-      return fmt.Errorf("failed to send finalize_block request to SBB: %s request params: platformHeight %d rollupHeight %d url %s now %d", err.Error(), message.PlatformBlockHeight, message.RollupBlockHeight, f.sequencerRpcUrls[f.leaderSequencerIndex], time.Now().UnixMilli())
-    }
+				continue
+			}
 
-    f.connectionRefused = false
-    f.finalizedBlockNumber = f.nextFinalizingBlockNumber
+			return fmt.Errorf("failed to send finalize_block request to SBB: %s request params: platformHeight %d rollupHeight %d url %s now %d", err.Error(), message.PlatformBlockHeight, message.RollupBlockHeight, f.sequencerRpcUrls[f.leaderSequencerIndex], time.Now().UnixMilli())
+		}
 
-    log.Debug("Successfully finalized the contents to be included in the block. ", "block number: ", f.nextFinalizingBlockNumber, " now: ", time.Now().UnixMilli())
-    
-    return nil
-  }
+		f.finalizedBlockNumber = f.nextFinalizingBlockNumber
 
-	return nil // TODO: error handling
-}
+		log.Debug("Successfully finalized the contents to be included in the block. ", "block number: ", f.nextFinalizingBlockNumber, " now: ", time.Now().UnixMilli())
 
-func (f *finalizer) parepareTransactions(ctx context.Context) error {
-	if f.preparedTxsBlockNumber == f.finalizedBlockNumber {
-		log.Debug("The transactions are already set up")
 		return nil
 	}
 
-  var txs types.Transactions
-  var err error
-  for i := 0; i < len(f.sequencerRpcUrls); i++ {
-    txs, err = f.getRawTransactionList(ctx)
-    if err == nil {
-      break
-    }
-    
-    if strings.Contains(err.Error(), "connection refused") {
-      f.connectionRefused = true
-
-      log.Warn("failed to processing due to no sequencer found. retrying with a different sequencer", "error", err.Error(), " url: ", f.sequencerRpcUrls[f.leaderSequencerIndex])
-      
-      if err = f.increaseLeaderSequencerIndex(); err != nil {
-        return err
-      }
-    }
-  }
-
-	if len(txs) > 0 {
-		if err = f.submitRawTransactions(ctx, txs); err != nil {
-			return fmt.Errorf("failed to add the transactions to the transaction pool: %s", err.Error())
-		}
-	}
-	f.preparedTxsBlockNumber = f.finalizedBlockNumber
-
-	log.Debug("Transaction processing succeeded.", "tx count: ", len(txs), " block number: ", f.finalizedBlockNumber, " now: ", time.Now().UnixMilli())
-	return nil
+	return errors.New("no sequencer")
 }
 
 func (f *finalizer) submitRawTransactions(ctx context.Context, txs types.Transactions) error {
@@ -639,8 +600,30 @@ func (f *finalizer) submitRawTransactions(ctx context.Context, txs types.Transac
 	return nil
 }
 
+func (f *finalizer) prepareTransactions(ctx context.Context) error {
+	if f.preparedTxsBlockNumber == f.finalizedBlockNumber {
+		log.Debug("The transactions are already set up")
+		return nil
+	}
+
+	txs, err := f.getRawTransactionList(ctx)
+	if err != nil {
+		return err
+	}
+
+	if len(txs) > 0 {
+		if err = f.submitRawTransactions(ctx, txs); err != nil {
+			return fmt.Errorf("failed to add the transactions to the transaction pool: %s", err.Error())
+		}
+	}
+	f.preparedTxsBlockNumber = f.finalizedBlockNumber
+
+	log.Debug("Transaction processing succeeded.", "tx count: ", len(txs), " block number: ", f.finalizedBlockNumber, " now: ", time.Now().UnixMilli())
+	return nil
+}
+
 func (f *finalizer) getRawTransactionList(ctx context.Context) (types.Transactions, error) {
-  reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
+	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
 
 	params := GetRawTransactionsParams{
@@ -649,131 +632,148 @@ func (f *finalizer) getRawTransactionList(ctx context.Context) (types.Transactio
 	}
 
 	body := newJsonRpcRequest(GetRawTransactionList, params)
+
 	res := &GetRawTransactionsResponse{}
-	if err := f.sbbClient.Send(reqCtx, f.sequencerRpcUrls[f.leaderSequencerIndex], body, res); err != nil {
-		if !strings.Contains(err.Error(), "connection refused") {
+	for i := 0; i < len(f.sequencerRpcUrls); i++ {
+		if err := f.sbbClient.Send(reqCtx, f.sequencerRpcUrls[f.leaderSequencerIndex], body, res); err != nil {
+			if strings.Contains(err.Error(), "connection refused") {
+				f.connectionRefused = true
+
+				log.Warn("failed to get raw transactions due to no sequencer found. retrying with a different sequencer")
+
+				if err = f.increaseLeaderSequencerIndex(); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			return nil, fmt.Errorf("failed to send get_raw_transaction_list request to SBB: %s height %d url %s now %d", err.Error(), params.RollupBlockHeight, f.sequencerRpcUrls[f.leaderSequencerIndex], time.Now().UnixMilli())
 		}
 
-    f.connectionRefused = true
-		return nil, err
+		var transactions []*types.Transaction
+		for _, hexString := range res.RawTransactions {
+			transaction, _ := hexToTransaction(hexString)
+			transactions = append(transactions, transaction)
+		}
+		return transactions, nil
 	}
 
-	f.connectionRefused = false
+	return nil, errors.New("no sequencer")
+}
 
-	var transactions []*types.Transaction
-	for _, hexString := range res.RawTransactions {
-		transaction, _ := hexToTransaction(hexString)
-		transactions = append(transactions, transaction)
+func Retry(ctx context.Context, fn func() error, retryInterval time.Duration) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		err := fn()
+		if err == nil {
+			return
+		}
+		time.Sleep(retryInterval)
 	}
-
-	return transactions, nil
 }
 
 // finalizeBatches runs the endless loop for processing transactions finalizing batches.
 func (f *finalizer) finalizeBatchesWithSbb(ctx context.Context) error {
 	log.Debug("finalizer init loop with SBB")
 
-	platformBlockNumber, err := f.fetchPlatformBlockNumber(ctx)
-	for err != nil {
+	var platformBlockNumber *uint64
+	var err error
+	Retry(ctx, func() error {
 		platformBlockNumber, err = f.fetchPlatformBlockNumber(ctx)
-	}
+		return err
+	}, 1*time.Second)
 
-  requestPlatformBlockNumber := *platformBlockNumber - 6
+	requestPlatformBlockNumber := *platformBlockNumber - 6
 
-  for {
-    if err = f.updateSequencerInfo(ctx, requestPlatformBlockNumber); err == nil {
-      break
-    }
-  }
+	Retry(ctx, func() error {
+		err = f.updateSequencerInfo(ctx, requestPlatformBlockNumber)
+		return err
+	}, 1*time.Second)
 
 	prevTimestamp := f.wipL2Block.timestamp
 	prevL1InfoTreeIndex := f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex
 
 	f.closeWIPL2Block(ctx)
 	f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
-	
-  for {
-    if err = f.finalizeBlock(ctx, requestPlatformBlockNumber); err == nil {
-      break
-    }
-  }
-		
+
+	Retry(ctx, func() error {
+		err = f.finalizeBlock(ctx, requestPlatformBlockNumber)
+		return err
+	}, 1*time.Second)
+
 	LOOPTIME := f.cfg.L2BlockMaxDeltaTimestamp.Milliseconds()
 
-  startTime := time.Now().UnixMilli()
+	startTime := time.Now().UnixMilli()
 
-  time.Sleep(time.Duration(LOOPTIME) * time.Millisecond)
+	time.Sleep(time.Duration(LOOPTIME) * time.Millisecond)
 
 	for {
-    // We have reached the L2 block time, we need to close the current L2 block and open a new one
-		// if f.wipL2Block.timestamp+uint64(f.cfg.L2BlockMaxDeltaTimestamp.Seconds()) <= uint64(time.Now().Unix()) {
-      startTime = time.Now().UnixMilli()
-			platformBlockNumber, err := f.fetchPlatformBlockNumber(ctx)
-			if err != nil {
-				log.Error("Failed to fetch platform block number", "error", err.Error())
-				time.Sleep(500 * time.Millisecond)
+		platformBlockNumber, err = f.fetchPlatformBlockNumber(ctx)
+		if err != nil {
+			log.Error("Failed to fetch platform block number", "error", err.Error())
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		requestPlatformBlockNumber = *platformBlockNumber - 6
+
+		if err = f.prepareTransactions(ctx); err != nil {
+			log.Error("failed to parepare transactions", "error", err.Error())
+			continue
+		}
+
+		if !f.connectionRefused {
+			if err := f.updateSequencerInfo(ctx, requestPlatformBlockNumber); err != nil {
+				log.Error("failed to update sequencer info", "error", err.Error())
 				continue
 			}
+			f.connectionRefused = false
+		}
 
-      requestPlatformBlockNumber := *platformBlockNumber - 6
+		prevTimestamp = f.wipL2Block.timestamp
+		prevL1InfoTreeIndex = f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex
+		f.closeWIPL2Block(ctx)
+		f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
 
-      if err = f.parepareTransactions(ctx); err != nil {
-        log.Error("failed to parepare transactions", "error", err.Error())
-        continue
-      }
+		if err = f.finalizeBlock(ctx, requestPlatformBlockNumber); err != nil {
+			log.Error("failed to finalize block", "error", err.Error())
+			continue
+		}
 
-      if !f.connectionRefused {
-        if err := f.updateSequencerInfo(ctx, requestPlatformBlockNumber); err != nil {
-          log.Error("failed to update sequencer info", "error", err.Error())
-          continue
-        }
-      }
-      
-			prevTimestamp := f.wipL2Block.timestamp
-			prevL1InfoTreeIndex := f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex
+		startTime = time.Now().UnixMilli()
 
-			f.closeWIPL2Block(ctx)
-			f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
-
-      if err := f.finalizeBlock(ctx, requestPlatformBlockNumber); err != nil {
-        log.Error("failed to finalize block", "error", err.Error())
-        continue
-      }
-		// }
-
-    endTime := time.Now().UnixMilli()
-    duration := endTime - startTime
-    
-    var nextActionDelay time.Duration
-    if LOOPTIME - duration > 0 {
-      nextActionDelay = time.Duration(LOOPTIME - duration)
-    } else {
-      nextActionDelay = time.Duration(0)
-    }
-
-    // wait for new ready txs in worker
-    f.workerReadyTxsCond.L.Lock()
-    //f.workerReadyTxsCond.WaitOrTimeout(f.cfg.NewTxsWaitInterval.Duration)
-    f.workerReadyTxsCond.WaitOrTimeout(nextActionDelay * time.Millisecond)
-    f.workerReadyTxsCond.L.Unlock()
-
-    if f.haltFinalizer.Load() {
+		if f.haltFinalizer.Load() {
 			// There is a fatal error and we need to halt the finalizer and stop processing new txs
 			for {
 				time.Sleep(5 * time.Second) //nolint:gomnd
 			}
 		}
-
 		// Check if we must finalize the batch due to a closing reason (resources exhausted, max txs, timestamp resolution, forced batches deadline)
 		if finalize, closeReason := f.checkIfFinalizeBatch(); finalize {
 			f.finalizeWIPBatch(ctx, closeReason)
 		}
-
-		if err := ctx.Err(); err != nil {
+		if err = ctx.Err(); err != nil {
 			log.Errorf("stopping finalizer because of context, error: %v", err)
 			return err
 		}
+
+		endTime := time.Now().UnixMilli()
+		duration := endTime - startTime
+		var nextActionDelay time.Duration
+		if LOOPTIME-duration > 0 {
+			nextActionDelay = time.Duration(LOOPTIME - duration)
+		} else {
+			nextActionDelay = time.Duration(0)
+		}
+
+		// wait for new ready txs in worker
+		f.workerReadyTxsCond.L.Lock()
+		f.workerReadyTxsCond.WaitOrTimeout(nextActionDelay * time.Millisecond)
+		f.workerReadyTxsCond.L.Unlock()
 	}
 }
 
