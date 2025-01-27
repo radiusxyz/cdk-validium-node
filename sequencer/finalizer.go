@@ -724,6 +724,7 @@ func (f *finalizer) finalizeBatchesWithSbb(ctx context.Context) error {
 	}, 1*time.Second)
 
 	requestPlatformBlockNumber := *platformBlockNumber - 6
+	
 	Retry(ctx, func() error {
 		err = f.updateSequencerInfo(ctx, requestPlatformBlockNumber)
 		return err
