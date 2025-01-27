@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"fmt"
 	"sync"
 	"time"
@@ -67,7 +68,7 @@ func New(cfg Config, batchCfg state.BatchConfig, poolCfg pool.Config, txPool txP
 }
 
 // Start starts the sequencer
-func (s *Sequencer) Start(ctx context.Context) {
+func (s *Sequencer) Start(ctx context.Context, sequencerPrivateKey *ecdsa.PrivateKey) {
 	for !s.isSynced(ctx) {
 		log.Infof("waiting for synchronizer to sync...")
 		time.Sleep(time.Second)
@@ -101,7 +102,9 @@ func (s *Sequencer) Start(ctx context.Context) {
 
 	s.workerReadyTxsCond = newTimeoutCond(&sync.Mutex{})
 	s.worker = NewWorker(s.stateIntf, s.batchCfg.Constraints, s.workerReadyTxsCond)
-	s.finalizer = newFinalizer(s.cfg.Finalizer, s.poolCfg, s.worker, s.pool, s.stateIntf, s.etherman, s.address, s.isSynced, s.batchCfg.Constraints, s.eventLog, s.streamServer, s.workerReadyTxsCond, s.dataToStream)
+	
+	s.finalizer = newFinalizer(s.cfg.Finalizer, s.poolCfg, s.worker, s.pool, s.stateIntf, s.etherman, s.address, s.isSynced, s.batchCfg.Constraints, s.eventLog, s.streamServer, s.workerReadyTxsCond, s.dataToStream, sequencerPrivateKey)
+
 	go s.finalizer.Start(ctx)
 
 	go s.deleteOldPoolTxs(ctx)

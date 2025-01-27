@@ -114,9 +114,9 @@ type FinalizerCfg struct {
 	// ClusterId
 	ClusterId string `mapstructure:"ClusterId"`
 
-	// SeedNodeURI is used allow Non-Sequencer nodes
+	// SeedNodeUrl is used allow Non-Sequencer nodes
 	// to relay transactions to the Sequencer node
-	SeedNodeURI string `mapstructure:"SeedNodeURI"`
+	SeedNodeUrl string `mapstructure:"SeedNodeUrl"`
 
 	// SequencerPrivateKey Private key of the trusted sequencer
 	SequencerPrivateKey types.KeystoreFileConfig `mapstructure:"SequencerPrivateKey"`

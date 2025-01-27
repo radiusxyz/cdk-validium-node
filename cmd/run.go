@@ -184,8 +184,15 @@ func start(cliCtx *cli.Context) error {
 			if poolInstance == nil {
 				poolInstance = createPool(c.Pool, c.State.Batch.Constraints, l2ChainID, st, eventLog)
 			}
+
 			seq := createSequencer(*c, poolInstance, st, etherman, eventLog)
-			go seq.Start(cliCtx.Context)
+
+			sequencerPrivateKey, err := config.NewKeyFromKeystore(c.Sequencer.Finalizer.SequencerPrivateKey)
+			if err != nil {
+				log.Fatal(err)
+			}
+			
+			go seq.Start(cliCtx.Context, sequencerPrivateKey)
 		case SEQUENCE_SENDER:
 			ev.Component = event.Component_Sequence_Sender
 			ev.Description = "Running sequence sender"

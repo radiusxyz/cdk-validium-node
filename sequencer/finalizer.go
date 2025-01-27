@@ -2,17 +2,21 @@ package sequencer
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/0xPolygonHermez/zkevm-node/sbbclient"
-	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"math/big"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/0xPolygonHermez/zkevm-node/sbbclient"
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/iden3/go-iden3-crypto/keccak256"
 
 	"github.com/0xPolygonHermez/zkevm-data-streamer/datastreamer"
 	"github.com/0xPolygonHermez/zkevm-node/event"
@@ -25,6 +29,7 @@ import (
 	"github.com/0xPolygonHermez/zkevm-node/state/runtime/executor"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 const (
@@ -104,6 +109,8 @@ type finalizer struct {
 	preparedTxsBlockNumber    uint64
 	nextFinalizingBlockNumber uint64
 	finalizedBlockNumber      uint64
+  
+  sequencerPrivateKey *ecdsa.PrivateKey
 }
 
 // newFinalizer returns a new instance of Finalizer.
@@ -121,6 +128,7 @@ func newFinalizer(
 	streamServer *datastreamer.StreamServer,
 	workerReadyTxsCond *timeoutCond,
 	dataToStream chan interface{},
+  sequencerPrivateKey *ecdsa.PrivateKey,
 ) *finalizer {
 	sbbClient := sbbclient.New()
 	ethClient, _ := ethclient.Dial(cfg.PlatformUrl) // TODO: error handling
@@ -175,6 +183,8 @@ func newFinalizer(
 		finalizedBlockNumber:      0, // TODO: check if this is correct
 		nextFinalizingBlockNumber: 0, // TODO: check if this is correct
 		preparedTxsBlockNumber:    0, // TODO: check if this is correct
+
+    sequencerPrivateKey: sequencerPrivateKey,
 	}
 	f.haltFinalizer.Store(false)
 	return &f
@@ -384,18 +394,25 @@ func (f *finalizer) fetchPlatformBlockNumber(ctx context.Context) (*uint64, erro
 func (f *finalizer) updateSequencerInfo(ctx context.Context, platformBlockNumber uint64) error {
 	sequencerAddresses, err := f.fetchSequencerAddresses(ctx, platformBlockNumber)
 	if err != nil {
+		log.Error("failed to fetch sequencer addresses ", "error ", err.Error())
 		return err
 	}
 
 	sequencerRpcUrls, err := f.fetchSequencerRpcUrls(ctx, sequencerAddresses)
 	if err != nil {
+		log.Error("failed to fetch sequencer rpc urls ", "error ", err.Error())
 		return err
 	}
 
+	log.Debug("Successfully fetched sequencer info", " sequencerAddresses: ", sequencerAddresses, " sequencerRpcUrls: ", sequencerRpcUrls)
+
 	leaderSequencerIndex, err := f.getLeaderSequencerIndex(sequencerRpcUrls)
 	if err != nil {
+		log.Error("failed to get leader sequencer index ", "error ", err.Error())
 		return err
 	}
+
+	log.Debug("Successfully fetched leader sequencer index", " leaderSequencerIndex: ", *leaderSequencerIndex)
 
 	f.sequencerAddresses = sequencerAddresses
 	f.sequencerRpcUrls = sequencerRpcUrls
@@ -456,7 +473,7 @@ func (f *finalizer) fetchSequencerRpcUrls(ctx context.Context, sequencerAddresse
 	})
 
 	res := &GetSequencerRpcUrlsResponse{}
-	if err := f.sbbClient.Send(reqCtx, f.cfg.SeedNodeURI, body, res); err != nil {
+	if err := f.sbbClient.Send(reqCtx, f.cfg.SeedNodeUrl, body, res); err != nil {
 		log.Error("failed to send get_sequencer_rpc_url_list request to seeder node", "error", err.Error())
 
 		return nil, err
@@ -473,7 +490,7 @@ func (f *finalizer) fetchSequencerRpcUrls(ctx context.Context, sequencerAddresse
 }
 
 func (f *finalizer) getLeaderSequencerIndex(sequencerRpcUrls []string) (*uint64, error) {
-	blockNumber := f.wipL2Block.trackingNum - 1
+	blockNumber := f.nextFinalizingBlockNumber
 
 	if len(sequencerRpcUrls) < 1 {
 		return nil, errors.New("there are no URLs available, making modular arithmetic impossible")
@@ -515,18 +532,36 @@ func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint6
 		}
 
 		message := FinalizeBlockMessageParams{
-			Platform:                f.cfg.Platform,
 			RollupId:                f.cfg.RollupId,
-			NextBlockCreatorAddress: f.sequencerAddresses[*nextSequencerIndex],
-			BlockCreatorAddress:     f.sequencerAddresses[f.leaderSequencerIndex],
+      ExecutorAddress:         f.sequencerAddress,
+
 			PlatformBlockHeight:     platformBlockNumber,
 			RollupBlockHeight:       f.nextFinalizingBlockNumber,
+			
+      BlockCreatorAddress:     strings.ToLower(f.sequencerAddresses[f.leaderSequencerIndex]),
+			NextBlockCreatorAddress: strings.ToLower(f.sequencerAddresses[*nextSequencerIndex]),
 		}
 
-		params := FinalizeBlockParams{
+    messageBytes, err := json.Marshal(message)
+    if err != nil {
+      log.Error("Error converting message to bytes: %v", err)
+			return err
+    }
+
+		h := keccak256.Hash(messageBytes)
+    
+    signature, err := crypto.Sign(h, f.sequencerPrivateKey)
+    if err != nil {
+			log.Error("Error signing message: %v", err)
+      return err
+    }
+
+    params := FinalizeBlockParams{
 			Message:   message,
-			Signature: "",
+			Signature: "0x" + common.Bytes2Hex(signature),
 		}
+
+		log.Debug("Finalizing the contents to be included in the block", "block number: ", f.nextFinalizingBlockNumber, "i",i)
 
 		body := newJsonRpcRequest(FinalizeBlock, params)
 		
@@ -542,7 +577,11 @@ func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint6
 
 			if err = f.increaseLeaderSequencerIndex(); err != nil {
 				return err
-			}			
+			}	
+
+			log.Debug("stopesi - Error", err)
+			
+			continue
 		}
 
 		f.finalizedBlockNumber = f.nextFinalizingBlockNumber
@@ -671,6 +710,12 @@ func Retry(ctx context.Context, fn func() error, retryInterval time.Duration) {
 func (f *finalizer) finalizeBatchesWithSbb(ctx context.Context) error {
 	log.Debug("finalizer init loop with SBB")
 
+	prevTimestamp := f.wipL2Block.timestamp
+	prevL1InfoTreeIndex := f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex
+
+	f.closeWIPL2Block(ctx)
+	f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
+
 	var platformBlockNumber *uint64
 	var err error
 	Retry(ctx, func() error {
@@ -679,17 +724,12 @@ func (f *finalizer) finalizeBatchesWithSbb(ctx context.Context) error {
 	}, 1*time.Second)
 
 	requestPlatformBlockNumber := *platformBlockNumber - 6
-
 	Retry(ctx, func() error {
 		err = f.updateSequencerInfo(ctx, requestPlatformBlockNumber)
 		return err
 	}, 1*time.Second)
 
-	prevTimestamp := f.wipL2Block.timestamp
-	prevL1InfoTreeIndex := f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex
-
-	f.closeWIPL2Block(ctx)
-	f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
+	log.Debug("Successfully updated sequencer info")
 
 	Retry(ctx, func() error {
 		err = f.finalizeBlock(ctx, requestPlatformBlockNumber)
@@ -1319,13 +1359,14 @@ type GetSequencerRpcUrlsResponse struct {
 }
 
 type FinalizeBlockMessageParams struct {
-	Platform                string `json:"platform"`
 	RollupId                string `json:"rollup_id"`
-	ExecutorAddress         string `json:"executor_address"`
-	BlockCreatorAddress     string `json:"block_creator_address"`
-	NextBlockCreatorAddress string `json:"next_block_creator_address"`
+	ExecutorAddress         common.Address `json:"executor_address"`
+
 	PlatformBlockHeight     uint64 `json:"platform_block_height"`
 	RollupBlockHeight       uint64 `json:"rollup_block_height"`
+
+	BlockCreatorAddress     string `json:"block_creator_address"`
+	NextBlockCreatorAddress string `json:"next_block_creator_address"`
 }
 
 type FinalizeBlockParams struct {
