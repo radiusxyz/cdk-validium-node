@@ -109,8 +109,8 @@ type finalizer struct {
 	preparedTxsBlockNumber    uint64
 	nextFinalizingBlockNumber uint64
 	finalizedBlockNumber      uint64
-  
-  sequencerPrivateKey *ecdsa.PrivateKey
+
+	sequencerPrivateKey *ecdsa.PrivateKey
 }
 
 // newFinalizer returns a new instance of Finalizer.
@@ -128,7 +128,7 @@ func newFinalizer(
 	streamServer *datastreamer.StreamServer,
 	workerReadyTxsCond *timeoutCond,
 	dataToStream chan interface{},
-  sequencerPrivateKey *ecdsa.PrivateKey,
+	sequencerPrivateKey *ecdsa.PrivateKey,
 ) *finalizer {
 	sbbClient := sbbclient.New()
 	ethClient, _ := ethclient.Dial(cfg.PlatformUrl) // TODO: error handling
@@ -184,7 +184,7 @@ func newFinalizer(
 		nextFinalizingBlockNumber: 0, // TODO: check if this is correct
 		preparedTxsBlockNumber:    0, // TODO: check if this is correct
 
-    sequencerPrivateKey: sequencerPrivateKey,
+		sequencerPrivateKey: sequencerPrivateKey,
 	}
 	f.haltFinalizer.Store(false)
 	return &f
@@ -532,39 +532,39 @@ func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint6
 		}
 
 		message := FinalizeBlockMessageParams{
-			RollupId:                f.cfg.RollupId,
-      ExecutorAddress:         f.sequencerAddress,
+			RollupId:        f.cfg.RollupId,
+			ExecutorAddress: f.sequencerAddress,
 
-			PlatformBlockHeight:     platformBlockNumber,
-			RollupBlockHeight:       f.nextFinalizingBlockNumber,
-			
-      BlockCreatorAddress:     strings.ToLower(f.sequencerAddresses[f.leaderSequencerIndex]),
+			PlatformBlockHeight: platformBlockNumber,
+			RollupBlockHeight:   f.nextFinalizingBlockNumber,
+
+			BlockCreatorAddress:     strings.ToLower(f.sequencerAddresses[f.leaderSequencerIndex]),
 			NextBlockCreatorAddress: strings.ToLower(f.sequencerAddresses[*nextSequencerIndex]),
 		}
 
-    messageBytes, err := json.Marshal(message)
-    if err != nil {
-      log.Error("Error converting message to bytes: %v", err)
+		messageBytes, err := json.Marshal(message)
+		if err != nil {
+			log.Error("Error converting message to bytes: %v", err)
 			return err
-    }
+		}
 
 		h := keccak256.Hash(messageBytes)
-    
-    signature, err := crypto.Sign(h, f.sequencerPrivateKey)
-    if err != nil {
-			log.Error("Error signing message: %v", err)
-      return err
-    }
 
-    params := FinalizeBlockParams{
+		signature, err := crypto.Sign(h, f.sequencerPrivateKey)
+		if err != nil {
+			log.Error("Error signing message: %v", err)
+			return err
+		}
+
+		params := FinalizeBlockParams{
 			Message:   message,
 			Signature: "0x" + common.Bytes2Hex(signature),
 		}
 
-		log.Debug("Finalizing the contents to be included in the block", "block number: ", f.nextFinalizingBlockNumber, "i",i)
+		log.Debug("Finalizing the contents to be included in the block", "block number: ", f.nextFinalizingBlockNumber, "i", i)
 
 		body := newJsonRpcRequest(FinalizeBlock, params)
-		
+
 		reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer reqCancel()
 
@@ -577,10 +577,10 @@ func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint6
 
 			if err = f.increaseLeaderSequencerIndex(); err != nil {
 				return err
-			}	
+			}
 
 			log.Debug("stopesi - Error", err)
-			
+
 			continue
 		}
 
@@ -669,7 +669,7 @@ func (f *finalizer) getRawTransactionList(ctx context.Context) (types.Transactio
 	for i := 0; i < len(f.sequencerRpcUrls); i++ {
 		if err := f.sbbClient.Send(reqCtx, f.sequencerRpcUrls[f.leaderSequencerIndex], body, res); err != nil {
 			if !strings.Contains(err.Error(), "connection refused") {
-				return nil, fmt.Errorf("failed to send get_raw_transaction_list request to SBB: %s height %d url %s now %d", err.Error(), params.RollupBlockHeight, f.sequencerRpcUrls[f.leaderSequencerIndex], time.Now().UnixMilli())	
+				return nil, fmt.Errorf("failed to send get_raw_transaction_list request to SBB: %s height %d url %s now %d", err.Error(), params.RollupBlockHeight, f.sequencerRpcUrls[f.leaderSequencerIndex], time.Now().UnixMilli())
 			}
 
 			log.Warn("failed to get raw transactions due to no sequencer found. retrying with a different sequencer")
@@ -724,7 +724,7 @@ func (f *finalizer) finalizeBatchesWithSbb(ctx context.Context) error {
 	}, 1*time.Second)
 
 	requestPlatformBlockNumber := *platformBlockNumber - 6
-	
+
 	Retry(ctx, func() error {
 		err = f.updateSequencerInfo(ctx, requestPlatformBlockNumber)
 		return err
@@ -1360,11 +1360,11 @@ type GetSequencerRpcUrlsResponse struct {
 }
 
 type FinalizeBlockMessageParams struct {
-	RollupId                string `json:"rollup_id"`
-	ExecutorAddress         common.Address `json:"executor_address"`
+	RollupId        string         `json:"rollup_id"`
+	ExecutorAddress common.Address `json:"executor_address"`
 
-	PlatformBlockHeight     uint64 `json:"platform_block_height"`
-	RollupBlockHeight       uint64 `json:"rollup_block_height"`
+	PlatformBlockHeight uint64 `json:"platform_block_height"`
+	RollupBlockHeight   uint64 `json:"rollup_block_height"`
 
 	BlockCreatorAddress     string `json:"block_creator_address"`
 	NextBlockCreatorAddress string `json:"next_block_creator_address"`
