@@ -162,6 +162,27 @@ func (f *finalizer) finalizeWIPBatch(ctx context.Context, closeReason state.Clos
 	}
 }
 
+// finalizeWIPBatch closes the current batch and opens a new one, potentially processing forced batches between the batch is closed and the resulting new empty batch
+func (f *finalizer) finalizeWIPBatchSbbVersion(ctx context.Context, closeReason state.ClosingReason) {
+	prevTimestamp := f.wipL2Block.timestamp
+	prevL1InfoTreeIndex := f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex
+
+	// Close the wip L2 block if it has transactions, otherwise we keep the wip L2 block to store it in the new wip batch
+	if !f.wipL2Block.isEmpty() {
+		f.closeWIPL2Block(ctx)
+	}
+
+	err := f.closeAndOpenNewWIPBatch(ctx, closeReason)
+	if err != nil {
+		f.Halt(ctx, fmt.Errorf("failed to create new WIP batch, error: %v", err), true)
+	}
+
+	// If we have closed the wipL2Block then we open a new one
+	if f.wipL2Block == nil {
+		f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
+	}
+}
+
 // closeAndOpenNewWIPBatch closes the current batch and opens a new one, potentially processing forced batches between the batch is closed and the resulting new wip batch
 func (f *finalizer) closeAndOpenNewWIPBatch(ctx context.Context, closeReason state.ClosingReason) error {
 	f.nextForcedBatchesMux.Lock()

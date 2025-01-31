@@ -398,7 +398,7 @@ func (f *finalizer) updateSequencerInfo(ctx context.Context, platformBlockNumber
 		return err
 	}
 
-	sequencerRpcUrls, err := f.fetchSequencerRpcUrls(ctx, sequencerAddresses)
+	validSequencerAddresses, sequencerRpcUrls, err := f.fetchSequencerRpcUrls(ctx, sequencerAddresses)
 	if err != nil {
 		log.Error("failed to fetch sequencer rpc urls ", "error ", err.Error())
 		return err
@@ -414,7 +414,7 @@ func (f *finalizer) updateSequencerInfo(ctx context.Context, platformBlockNumber
 
 	log.Debug("Successfully fetched leader sequencer index", " leaderSequencerIndex: ", *leaderSequencerIndex)
 
-	f.sequencerAddresses = sequencerAddresses
+	f.sequencerAddresses = validSequencerAddresses
 	f.sequencerRpcUrls = sequencerRpcUrls
 	f.leaderSequencerIndex = *leaderSequencerIndex
 	return nil
@@ -464,7 +464,7 @@ func (f *finalizer) fetchSequencerAddresses(ctx context.Context, platformBlockNu
 	return sequencerAddresses, nil
 }
 
-func (f *finalizer) fetchSequencerRpcUrls(ctx context.Context, sequencerAddresses []string) ([]string, error) {
+func (f *finalizer) fetchSequencerRpcUrls(ctx context.Context, sequencerAddresses []string) ([]string, []string, error) {
 	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
 
@@ -476,17 +476,19 @@ func (f *finalizer) fetchSequencerRpcUrls(ctx context.Context, sequencerAddresse
 	if err := f.sbbClient.Send(reqCtx, f.cfg.SeedNodeUrl, body, res); err != nil {
 		log.Error("failed to send get_sequencer_rpc_url_list request to seeder node", "error", err.Error())
 
-		return nil, err
+		return nil, nil, err
 	}
 
+	var validSequencerAddresses []string
 	var sequencerRpcUrls []string
 	for _, sequencerRpcUrl := range res.SequencerRpcUrls {
 		if sequencerRpcUrl.ClusterRpcUrl != "" {
+			validSequencerAddresses = append(validSequencerAddresses, sequencerRpcUrl.Address)
 			sequencerRpcUrls = append(sequencerRpcUrls, sequencerRpcUrl.ClusterRpcUrl)
 		}
 	}
 
-	return sequencerRpcUrls, nil
+	return validSequencerAddresses, sequencerRpcUrls, nil
 }
 
 func (f *finalizer) getLeaderSequencerIndex(sequencerRpcUrls []string) (*uint64, error) {
@@ -494,6 +496,13 @@ func (f *finalizer) getLeaderSequencerIndex(sequencerRpcUrls []string) (*uint64,
 
 	if len(sequencerRpcUrls) < 1 {
 		return nil, errors.New("there are no URLs available, making modular arithmetic impossible")
+	}
+
+	for i := 0; i < len(sequencerRpcUrls); i++ {
+		if sequencerRpcUrls[i] == "http://210.222.63.26:5000" {
+			index := uint64(i) 
+			return &index, nil
+		}
 	}
 
 	mod := blockNumber % uint64(len(sequencerRpcUrls))
@@ -526,10 +535,10 @@ func (f *finalizer) increaseLeaderSequencerIndex() error {
 
 func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint64) error {
 	for i := 0; i < len(f.sequencerRpcUrls); i++ {
-		nextSequencerIndex, err := f.getNextLeaderSequencerIndex(f.leaderSequencerIndex)
-		if err != nil {
-			return err
-		}
+		// nextSequencerIndex, err := f.getNextLeaderSequencerIndex(f.leaderSequencerIndex)
+		// if err != nil {
+		// 	return err
+		// }
 
 		message := FinalizeBlockMessageParams{
 			RollupId:        f.cfg.RollupId,
@@ -537,9 +546,10 @@ func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint6
 
 			PlatformBlockHeight: platformBlockNumber,
 			RollupBlockHeight:   f.nextFinalizingBlockNumber,
-
-			BlockCreatorAddress:     strings.ToLower(f.sequencerAddresses[f.leaderSequencerIndex]),
-			NextBlockCreatorAddress: strings.ToLower(f.sequencerAddresses[*nextSequencerIndex]),
+			
+      BlockCreatorAddress:     strings.ToLower(f.sequencerAddresses[f.leaderSequencerIndex]),
+			NextBlockCreatorAddress:     strings.ToLower(f.sequencerAddresses[f.leaderSequencerIndex]),
+			// NextBlockCreatorAddress: strings.ToLower(f.sequencerAddresses[*nextSequencerIndex]),
 		}
 
 		messageBytes, err := json.Marshal(message)
@@ -595,6 +605,10 @@ func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint6
 }
 
 func (f *finalizer) submitRawTransactions(ctx context.Context, txs types.Transactions) error {
+
+  fmt.Println("stompesi - submitRawTransactions - f.finalizedBlockNumber: ", f.finalizedBlockNumber)
+  fmt.Println("stompesi - submitRawTransactions - tx_count: ", txs.Len())
+  
 	for _, tx := range txs {
 		processBatchResponse, err := f.stateIntf.PreProcessTransaction(ctx, tx, nil)
 
@@ -628,6 +642,15 @@ func (f *finalizer) submitRawTransactions(ctx context.Context, txs types.Transac
 			}
 			break
 		}
+
+    // Check if we must finalize the batch due to a closing reason (resources exhausted, max txs, timestamp resolution, forced batches deadline)
+		// if finalize, closeReason := f.checkIfFinalizeBatch(); finalize {
+		// 	f.finalizeWIPBatchSbbVersion(ctx, closeReason)
+		// }
+		// if err = ctx.Err(); err != nil {
+		// 	log.Errorf("stopping finalizer because of context, error: %v", err)
+		// 	return err
+		// }
 	}
 	return nil
 }
@@ -782,9 +805,11 @@ func (f *finalizer) finalizeBatchesWithSbb(ctx context.Context) error {
 			}
 		}
 		// Check if we must finalize the batch due to a closing reason (resources exhausted, max txs, timestamp resolution, forced batches deadline)
-		if finalize, closeReason := f.checkIfFinalizeBatch(); finalize {
-			f.finalizeWIPBatch(ctx, closeReason)
+		
+		if !f.wipBatch.isEmpty() {
+			f.finalizeWIPBatchSbbVersion(ctx, state.ResourceMarginExhaustedClosingReason)
 		}
+		
 		if err = ctx.Err(); err != nil {
 			log.Errorf("stopping finalizer because of context, error: %v", err)
 			return err
