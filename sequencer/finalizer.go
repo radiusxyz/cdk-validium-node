@@ -106,11 +106,13 @@ type finalizer struct {
 	sequencerAddresses   []string
 	leaderSequencerIndex uint64
 
-	preparedTxsBlockNumber    uint64
-	
+	preparedTxsBlockNumber uint64
+
 	sequencerPrivateKey *ecdsa.PrivateKey
 
-	blockTransactions map[uint64]types.Transactions
+	blockTransactions    map[uint64]types.Transactions
+	finalizedBlockNumber uint64
+	isFinalizingActive   bool
 }
 
 // newFinalizer returns a new instance of Finalizer.
@@ -175,17 +177,25 @@ func newFinalizer(
 		dataToStream: dataToStream,
 
 		// sbb
-		sbbClient:                 sbbClient,
-		ethClient:                 ethClient,
-		sequencerRpcUrls:          make([]string, 0),
-		sequencerAddresses:        make([]string, 0),
-		leaderSequencerIndex:      0,
-		preparedTxsBlockNumber:    0, // TODO: check if this is correct
+		sbbClient:              sbbClient,
+		ethClient:              ethClient,
+		sequencerRpcUrls:       make([]string, 0),
+		sequencerAddresses:     make([]string, 0),
+		leaderSequencerIndex:   0,
+		preparedTxsBlockNumber: 0, // TODO: check if this is correct
 
 		sequencerPrivateKey: sequencerPrivateKey,
 
-		blockTransactions: make(map[uint64]types.Transactions),
+		blockTransactions:  make(map[uint64]types.Transactions),
+		isFinalizingActive: true,
 	}
+
+	lastL2Block, err := f.stateIntf.GetLastL2Block(context.Background(), nil)
+	if err != nil {
+		log.Fatalf("failed to get last L2 block number, error: %v", err)
+	}
+	f.finalizedBlockNumber = lastL2Block.Number().Uint64()
+
 	f.haltFinalizer.Store(false)
 	return &f
 }
@@ -216,24 +226,17 @@ func (f *finalizer) Start(ctx context.Context) {
 	// Foced batches checking
 	go f.checkForcedBatches(ctx)
 
-	
-	if f.cfg.UseExternalSequencer {	
-		lastL2Block, err := f.stateIntf.GetLastL2Block(ctx, nil)
-		if err != nil {
-			log.Fatalf("failed to get last L2 block number, error: %v", err)
-		}
-		finalizeBlockNumber := lastL2Block.Number().Uint64()
+	if f.cfg.UseExternalSequencer {
+		go f.requestFinalizeBlockAndGetRawTransactions(ctx)
 
-		go f.requestFinalizeBlockAndGetRawTransactions(ctx, finalizeBlockNumber)
-		
-		f.finalizeBatchesWithSbb(ctx, finalizeBlockNumber)
+		f.finalizeBatchesWithSbb(ctx)
 	} else {
 		// Processing transactions and finalizing batches
 		f.finalizeBatches(ctx)
 	}
 }
 
-func (f *finalizer) requestFinalizeBlockAndGetRawTransactions(ctx context.Context, finalizeBlockNumber uint64) {
+func (f *finalizer) requestFinalizeBlockAndGetRawTransactions(ctx context.Context) {
 	var platformBlockNumber *uint64
 
 	var validSequencerAddresses []string
@@ -241,78 +244,109 @@ func (f *finalizer) requestFinalizeBlockAndGetRawTransactions(ctx context.Contex
 	var leaderSequencerIndex *uint64
 
 	var err error
-	LOOPTIME := f.cfg.L2BlockMaxDeltaTimestamp.Milliseconds()
+	loopTime := f.cfg.L2BlockMaxDeltaTimestamp.Milliseconds()
 
 	for {
-			startTime := time.Now().UnixMilli()
 
-			Retry(ctx, func() error {
-				platformBlockNumber, err = f.fetchPlatformBlockNumber(ctx)
-				return err
-			}, 300*time.Millisecond)
+		if !f.isFinalizingActive {
+			if len(f.blockTransactions) == 0 {
 
-			requestPlatformBlockNumber := *platformBlockNumber - 6
+				// Request SBB to Start
 
-			Retry(ctx, func() error {
-				validSequencerAddresses, sequencerRpcUrls, leaderSequencerIndex, err = f.fetchSequencerInfo(ctx, requestPlatformBlockNumber, finalizeBlockNumber)
-				return err
-			}, 300*time.Millisecond)
-
-			log.Debug("Successfully updated sequencer info")
-
-			Retry(ctx, func() error {
-				err = f.finalizeBlock(ctx, requestPlatformBlockNumber, finalizeBlockNumber, sequencerRpcUrls, leaderSequencerIndex, validSequencerAddresses)
-				return err
-			}, 300*time.Millisecond)
-
-
-			Retry(ctx, func() error {
-				txs, err := f.getRawTransactions(ctx, finalizeBlockNumber, sequencerRpcUrls, leaderSequencerIndex)
-				if err != nil {
-					return err
-				}
-				f.blockTransactions[finalizeBlockNumber] = txs
-
-				return nil
-			}, 300*time.Millisecond)
-
-			finalizeBlockNumber++	
-
-			endTime := time.Now().UnixMilli()
-			duration := endTime - startTime
-			var nextActionDelay time.Duration
-			if LOOPTIME-duration > 0 {
-				nextActionDelay = time.Duration(LOOPTIME - duration)
+				f.isFinalizingActive = true
 			} else {
-				nextActionDelay = time.Duration(0)
+				time.Sleep(100 * time.Millisecond)
+				continue
 			}
+		}
 
-			time.Sleep(nextActionDelay * time.Millisecond)
+		if f.isFinalizingActive && len(f.blockTransactions) >= f.cfg.MaxBlockTransactionsMapSize {
+
+			// Request SBB to stop
+
+			f.isFinalizingActive = false
+
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		startTime := time.Now().UnixMilli()
+
+		Retry(ctx, func() error {
+			platformBlockNumber, err = f.fetchPlatformBlockNumber(ctx)
+			return err
+		}, 300*time.Millisecond)
+
+		requestPlatformBlockNumber := *platformBlockNumber - 6
+
+		finalizingBlockNumber := f.finalizedBlockNumber + 1
+
+		Retry(ctx, func() error {
+			validSequencerAddresses, sequencerRpcUrls, leaderSequencerIndex, err = f.fetchSequencerInfo(ctx, requestPlatformBlockNumber, finalizingBlockNumber)
+			return err
+		}, 300*time.Millisecond)
+
+		log.Debug("Successfully updated sequencer info")
+
+		Retry(ctx, func() error {
+			err = f.finalizeBlock(ctx, requestPlatformBlockNumber, finalizingBlockNumber, sequencerRpcUrls, leaderSequencerIndex, validSequencerAddresses)
+			return err
+		}, 300*time.Millisecond)
+
+		Retry(ctx, func() error {
+			txs, err := f.getRawTransactions(ctx, finalizingBlockNumber, sequencerRpcUrls, leaderSequencerIndex)
+			if err != nil {
+				return err
+			}
+			f.blockTransactions[finalizingBlockNumber] = txs
+
+			return nil
+		}, 300*time.Millisecond)
+
+		f.finalizedBlockNumber = finalizingBlockNumber
+
+		endTime := time.Now().UnixMilli()
+		duration := endTime - startTime
+		var nextActionDelay time.Duration
+		if loopTime-duration > 0 {
+			nextActionDelay = time.Duration(loopTime - duration)
+		} else {
+			nextActionDelay = time.Duration(0)
+		}
+
+		time.Sleep(nextActionDelay * time.Millisecond)
 	}
 }
 
 // finalizeBatches runs the endless loop for processing transactions finalizing batches.
-func (f *finalizer) finalizeBatchesWithSbb(ctx context.Context, finalizeBlockNumber uint64) error {
+func (f *finalizer) finalizeBatchesWithSbb(ctx context.Context) error {
 	log.Debug("finalizer init loop with SBB")
 
 	for {
 		if f.wipL2Block.timestamp+uint64(f.cfg.L2BlockMaxDeltaTimestamp.Seconds()) <= uint64(time.Now().Unix()) {
-			txs, exists := f.blockTransactions[finalizeBlockNumber]
 
+			lastL2Block, err := f.stateIntf.GetLastL2Block(ctx, nil)
+			if err != nil {
+				log.Fatalf("failed to get last L2 block number, error: %v", err)
+			}
+
+			targetBlockNumber := lastL2Block.Number().Uint64() + 1
+
+			txs, exists := f.blockTransactions[targetBlockNumber]
 
 			for !exists {
+				fmt.Println("Waiting txs...")
 				f.workerReadyTxsCond.L.Lock()
 				f.workerReadyTxsCond.WaitOrTimeout(f.cfg.NewTxsWaitInterval.Duration)
 				f.workerReadyTxsCond.L.Unlock()
 
-				txs, exists = f.blockTransactions[finalizeBlockNumber]
+				txs, exists = f.blockTransactions[targetBlockNumber]
 			}
 
-
 			if len(txs) > 0 {
-				fmt.Println("stompesi - submitRawTransactions - f.finalizedBlockNumber: ", finalizeBlockNumber)
+				fmt.Println("stompesi - submitRawTransactions - f.finalizedBlockNumber: ", targetBlockNumber)
 				fmt.Println("stompesi - submitRawTransactions - tx_count: ", txs.Len())
-				
+
 				for _, tx := range txs {
 					processBatchResponse, err := f.stateIntf.PreProcessTransaction(ctx, tx, nil)
 
@@ -348,11 +382,9 @@ func (f *finalizer) finalizeBatchesWithSbb(ctx context.Context, finalizeBlockNum
 					}
 				}
 			}
-
 			f.finalizeWIPL2Block(ctx)
-
-			finalizeBlockNumber++
-		}		
+			delete(f.blockTransactions, targetBlockNumber)
+		}
 
 		idleTime := time.Now()
 
@@ -374,7 +406,7 @@ func (f *finalizer) finalizeBatchesWithSbb(ctx context.Context, finalizeBlockNum
 		if finalize, closeReason := f.checkIfFinalizeBatch(); finalize {
 			f.finalizeWIPBatchSbbVersion(ctx, closeReason)
 		}
-		
+
 		if err := ctx.Err(); err != nil {
 			log.Errorf("stopping finalizer because of context, error: %v", err)
 			return err
@@ -577,7 +609,7 @@ func (f *finalizer) getLeaderSequencerIndex(finalizeBlockNumber uint64, sequence
 
 	for i := 0; i < len(sequencerRpcUrls); i++ {
 		if sequencerRpcUrls[i] == "http://210.222.63.26:5000" {
-			index := uint64(i) 
+			index := uint64(i)
 			return &index, nil
 		}
 	}
@@ -657,8 +689,6 @@ func (f *finalizer) fetchSequencerRpcUrls(ctx context.Context, sequencerAddresse
 	return validSequencerAddresses, sequencerRpcUrls, nil
 }
 
-
-
 func (f *finalizer) getNextLeaderSequencerIndex(sequencerCount uint64, currentLeaderSeqeuncerIndex uint64) (*uint64, error) {
 	if sequencerCount < 1 {
 		return nil, errors.New("cannot divide by zero")
@@ -695,8 +725,8 @@ func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint6
 
 			PlatformBlockHeight: platformBlockNumber,
 			RollupBlockHeight:   finalizeBlockNumber,
-			
-      BlockCreatorAddress:     strings.ToLower(sequencerAddresses[*leaderSequencerIndex]),
+
+			BlockCreatorAddress:     strings.ToLower(sequencerAddresses[*leaderSequencerIndex]),
 			NextBlockCreatorAddress: strings.ToLower(sequencerAddresses[*nextSequencerIndex]),
 		}
 

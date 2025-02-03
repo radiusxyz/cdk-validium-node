@@ -97,6 +97,8 @@ type FinalizerCfg struct {
 	// UseExternalSequencer
 	UseExternalSequencer bool `mapstructure:"UseExternalSequencer"`
 
+	MaxBlockTransactionsMapSize int `mapstructure:"MaxBlockTransactionsMapSize"`
+
 	// RollupId
 	RollupId string `mapstructure:"RollupId"`
 

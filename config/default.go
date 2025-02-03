@@ -146,6 +146,7 @@ StateConsistencyCheckInterval = "5s"
 		SequentialProcessL2Block = true
 
 		UseExternalSequencer = true
+		MaxBlockTransactionsMapSize = 10
 		RollupId = "radius_rollup"
 		Platform = "ethereum"
 		PlatformUrl = "https://ethereum-holesky-rpc.publicnode.com"
