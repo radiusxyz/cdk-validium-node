@@ -132,8 +132,6 @@ func newFinalizer(
 	dataToStream chan interface{},
 	sequencerPrivateKey *ecdsa.PrivateKey,
 ) *finalizer {
-	sbbClient := sbbclient.New()
-	ethClient, _ := ethclient.Dial(cfg.PlatformUrl) // TODO: error handling
 
 	f := finalizer{
 		cfg:              cfg,
@@ -175,19 +173,21 @@ func newFinalizer(
 		// stream server
 		streamServer: streamServer,
 		dataToStream: dataToStream,
+	}
 
-		// sbb
-		sbbClient:              sbbClient,
-		ethClient:              ethClient,
-		sequencerRpcUrls:       make([]string, 0),
-		sequencerAddresses:     make([]string, 0),
-		leaderSequencerIndex:   0,
-		preparedTxsBlockNumber: 0, // TODO: check if this is correct
+	if f.cfg.UseExternalSequencer {
+		sbbClient := sbbclient.New()
+		ethClient, _ := ethclient.Dial(cfg.PlatformUrl) // TODO: error handling
 
-		sequencerPrivateKey: sequencerPrivateKey,
-
-		blockTransactions:  make(map[uint64]types.Transactions),
-		isFinalizingActive: true,
+		f.sbbClient = sbbClient
+		f.ethClient = ethClient
+		f.sequencerRpcUrls = make([]string, 0)
+		f.sequencerAddresses = make([]string, 0)
+		f.leaderSequencerIndex = 0
+		f.preparedTxsBlockNumber = 0
+		f.sequencerPrivateKey = sequencerPrivateKey
+		f.blockTransactions = make(map[uint64]types.Transactions)
+		f.isFinalizingActive = true
 	}
 
 	lastL2Block, err := f.stateIntf.GetLastL2Block(context.Background(), nil)
@@ -247,7 +247,6 @@ func (f *finalizer) requestFinalizeBlockAndGetRawTransactions(ctx context.Contex
 	loopTime := f.cfg.L2BlockMaxDeltaTimestamp.Milliseconds()
 
 	for {
-
 		if !f.isFinalizingActive {
 			if len(f.blockTransactions) == 0 {
 
