@@ -164,6 +164,11 @@ func (f *finalizer) finalizeWIPBatch(ctx context.Context, closeReason state.Clos
 
 // finalizeWIPBatch closes the current batch and opens a new one, potentially processing forced batches between the batch is closed and the resulting new empty batch
 func (f *finalizer) finalizeWIPBatchSbbVersion(ctx context.Context, closeReason state.ClosingReason) {
+	if f.wipBatch.isEmpty() {
+		log.Infof("empty batch %d, closing reason: %s", f.wipBatch.batchNumber, closeReason)
+		return
+	}
+
 	err := f.closeAndOpenNewWIPBatch(ctx, closeReason)
 	if err != nil {
 		f.Halt(ctx, fmt.Errorf("failed to create new WIP batch, error: %v", err), true)

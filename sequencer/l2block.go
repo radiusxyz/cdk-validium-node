@@ -466,7 +466,6 @@ func (f *finalizer) finalizeWIPL2Block(ctx context.Context) {
 	prevL1InfoTreeIndex := f.wipL2Block.l1InfoTreeExitRoot.L1InfoTreeIndex
 
 	f.closeWIPL2Block(ctx)
-
 	f.openNewWIPL2Block(ctx, prevTimestamp, &prevL1InfoTreeIndex)
 }
 
