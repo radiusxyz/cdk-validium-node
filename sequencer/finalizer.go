@@ -748,7 +748,7 @@ func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint6
 			Signature: "0x" + common.Bytes2Hex(signature),
 		}
 
-		log.Debug("Finalizing the contents to be included in the block", "block number: ", finalizeBlockNumber, "i", i)
+		log.Debug("Finalizing the contents to be included in the block", "block number: ", finalizeBlockNumber)
 
 		body := newJsonRpcRequest(FinalizeBlock, params)
 
