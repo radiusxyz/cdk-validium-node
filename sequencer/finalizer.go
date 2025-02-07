@@ -804,6 +804,7 @@ func (f *finalizer) getRawTransactions(ctx context.Context, finalizedBlockNumber
 			if err = f.increaseLeaderSequencerIndex(uint64(sequencerCount), leaderSequencerIndex); err != nil {
 				return nil, err
 			}
+			continue
 		}
 
 		var transactions []*types.Transaction
