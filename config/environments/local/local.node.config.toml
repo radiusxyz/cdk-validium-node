@@ -104,7 +104,7 @@ StateConsistencyCheckInterval = "5s"
 		SequentialBatchSanityCheck = false
 		SequentialProcessL2Block = true
     
-    UseExternalSequencer = true
+    UseTxOrderer = true
 	  MaxBlockTransactionsMapSize = 10
     RollupId = "radius_rollup"
 		Platform = "ethereum"

@@ -46,10 +46,10 @@ type Method string
 const (
 	FinalizeBlock          Method = "finalize_block"
 	GetRawTransactionList  Method = "get_raw_transaction_list"
-	GetSequencerRpcUrlList Method = "get_sequencer_rpc_url_list"
+	GetTxOrdererRpcUrlList Method = "get_tx_orderer_rpc_url_list"
 )
 
-// finalizer represents the finalizer component of the sequencer.
+// finalizer represents the finalizer component of the tx_orderer.
 type finalizer struct {
 	cfg              FinalizerCfg
 	isSynced         func(ctx context.Context) bool
@@ -102,9 +102,9 @@ type finalizer struct {
 	ethClient *ethclient.Client
 	sbbClient *sbbclient.SbbClient
 
-	sequencerRpcUrls     []string
-	sequencerAddresses   []string
-	leaderSequencerIndex uint64
+	txOrdererRpcUrls     []string
+	txOrdererAddresses   []string
+	leaderTxOrdererIndex uint64
 
 	sequencerPrivateKey *ecdsa.PrivateKey
 
@@ -173,15 +173,15 @@ func newFinalizer(
 		dataToStream: dataToStream,
 	}
 
-	if f.cfg.UseExternalSequencer {
+	if f.cfg.UseTxOrderer {
 		sbbClient := sbbclient.New()
 		ethClient, _ := ethclient.Dial(cfg.PlatformUrl) // TODO: error handling
 
 		f.sbbClient = sbbClient
 		f.ethClient = ethClient
-		f.sequencerRpcUrls = make([]string, 0)
-		f.sequencerAddresses = make([]string, 0)
-		f.leaderSequencerIndex = 0
+		f.txOrdererRpcUrls = make([]string, 0)
+		f.txOrdererAddresses = make([]string, 0)
+		f.leaderTxOrdererIndex = 0
 		f.sequencerPrivateKey = sequencerPrivateKey
 		f.blockTransactions = make(map[uint64]types.Transactions)
 		f.isFinalizingActive = true
@@ -217,7 +217,7 @@ func (f *finalizer) Start(ctx context.Context) {
 	// Foced batches checking
 	go f.checkForcedBatches(ctx)
 
-	if f.cfg.UseExternalSequencer {
+	if f.cfg.UseTxOrderer {
 		go f.requestFinalizeBlockAndGetRawTransactions(ctx)
 
 		f.finalizeBatchesWithSbb(ctx)
@@ -230,9 +230,9 @@ func (f *finalizer) Start(ctx context.Context) {
 func (f *finalizer) requestFinalizeBlockAndGetRawTransactions(ctx context.Context) {
 	var platformBlockNumber *uint64
 
-	var validSequencerAddresses []string
-	var sequencerRpcUrls []string
-	var leaderSequencerIndex *uint64
+	var validTxOrdererAddresses []string
+	var txOrdererRpcUrls []string
+	var leaderTxOrdererIndex *uint64
 
 	var err error
 	loopTime := f.cfg.L2BlockMaxDeltaTimestamp.Milliseconds()
@@ -272,16 +272,16 @@ func (f *finalizer) requestFinalizeBlockAndGetRawTransactions(ctx context.Contex
 		requestPlatformBlockNumber := *platformBlockNumber - 6
 		finalizingBlockNumber := finalizedBlockNumber + 1
 
-		validSequencerAddresses, sequencerRpcUrls, leaderSequencerIndex, err = f.fetchSequencerInfo(ctx, requestPlatformBlockNumber, finalizingBlockNumber)
+		validTxOrdererAddresses, txOrdererRpcUrls, leaderTxOrdererIndex, err = f.fetchTxOrdererInfo(ctx, requestPlatformBlockNumber, finalizingBlockNumber)
 		if err != nil {
-			log.Errorf("failed to fetch sequencer info, error: %v", err)
+			log.Errorf("failed to fetch tx_orderer info, error: %v", err)
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 
-		log.Debug("Successfully updated sequencer info")
+		log.Debug("Successfully updated tx_orderer info")
 
-		err = f.finalizeBlock(ctx, requestPlatformBlockNumber, finalizingBlockNumber, sequencerRpcUrls, leaderSequencerIndex, validSequencerAddresses)
+		err = f.finalizeBlock(ctx, requestPlatformBlockNumber, finalizingBlockNumber, txOrdererRpcUrls, leaderTxOrdererIndex, validTxOrdererAddresses)
 		if err != nil {
 			log.Errorf("failed to finalize block, error: %v", err)
 			time.Sleep(100 * time.Millisecond)
@@ -291,12 +291,12 @@ func (f *finalizer) requestFinalizeBlockAndGetRawTransactions(ctx context.Contex
 		time.Sleep(300 * time.Millisecond)
 
 		Retry(ctx, func() error {
-			txs, err := f.getRawTransactions(ctx, finalizingBlockNumber, sequencerRpcUrls, leaderSequencerIndex)
+			txs, err := f.getRawTransactions(ctx, finalizingBlockNumber, txOrdererRpcUrls, leaderTxOrdererIndex)
 			if err != nil {
 				return err
 			}
 			f.blockTransactions[finalizingBlockNumber] = txs
-
+			log.Debug("Successfully get transactions", "count", len(txs))
 			return nil
 		}, 100*time.Millisecond)
 
@@ -574,50 +574,50 @@ func (f *finalizer) fetchPlatformBlockNumber(ctx context.Context) (*uint64, erro
 	return &platformBlockNumber, nil
 }
 
-func (f *finalizer) fetchSequencerInfo(ctx context.Context, platformBlockNumber uint64, finalizeBlockNumber uint64) ([]string, []string, *uint64, error) {
-	sequencerAddresses, err := f.fetchSequencerAddresses(ctx, platformBlockNumber)
+func (f *finalizer) fetchTxOrdererInfo(ctx context.Context, platformBlockNumber uint64, finalizeBlockNumber uint64) ([]string, []string, *uint64, error) {
+	txOrdererAddresses, err := f.fetchTxOrdererAddresses(ctx, platformBlockNumber)
 	if err != nil {
-		log.Error("failed to fetch sequencer addresses ", "error ", err.Error())
+		log.Error("failed to fetch tx_orderer addresses ", "error ", err.Error())
 		return nil, nil, nil, err
 	}
 
-	validSequencerAddresses, sequencerRpcUrls, err := f.fetchSequencerRpcUrls(ctx, sequencerAddresses)
+	validTxOrdererAddresses, txOrdererRpcUrls, err := f.fetchTxOrdererRpcUrls(ctx, txOrdererAddresses)
 	if err != nil {
-		log.Error("failed to fetch sequencer rpc urls ", "error ", err.Error())
+		log.Error("failed to fetch tx_orderer rpc urls ", "error ", err.Error())
 		return nil, nil, nil, err
 	}
 
-	log.Debug("Successfully fetched sequencer info", " sequencerAddresses: ", sequencerAddresses, " sequencerRpcUrls: ", sequencerRpcUrls)
+	log.Debug("Successfully fetched tx_orderer info", " txOrdererAddresses: ", txOrdererAddresses, " txOrdererRpcUrls: ", txOrdererRpcUrls)
 
-	leaderSequencerIndex, err := f.getLeaderSequencerIndex(finalizeBlockNumber, sequencerRpcUrls)
+	leaderTxOrdererIndex, err := f.getLeaderTxOrdererIndex(finalizeBlockNumber, txOrdererRpcUrls)
 	if err != nil {
-		log.Error("failed to get leader sequencer index ", "error ", err.Error())
+		log.Error("failed to get leader tx_orderer index ", "error ", err.Error())
 		return nil, nil, nil, err
 	}
 
-	log.Debug("Successfully fetched leader sequencer index", " leaderSequencerIndex: ", *leaderSequencerIndex)
+	log.Debug("Successfully fetched leader tx_orderer index", " leaderTxOrdererIndex: ", *leaderTxOrdererIndex)
 
-	return validSequencerAddresses, sequencerRpcUrls, leaderSequencerIndex, nil
+	return validTxOrdererAddresses, txOrdererRpcUrls, leaderTxOrdererIndex, nil
 }
 
-func (f *finalizer) getLeaderSequencerIndex(finalizeBlockNumber uint64, sequencerRpcUrls []string) (*uint64, error) {
+func (f *finalizer) getLeaderTxOrdererIndex(finalizeBlockNumber uint64, txOrdererRpcUrls []string) (*uint64, error) {
 
-	if len(sequencerRpcUrls) < 1 {
+	if len(txOrdererRpcUrls) < 1 {
 		return nil, errors.New("there are no URLs available, making modular arithmetic impossible")
 	}
 
-	for i := 0; i < len(sequencerRpcUrls); i++ {
-		if sequencerRpcUrls[i] == "http://210.222.63.26:5000" {
-			index := uint64(i)
-			return &index, nil
-		}
-	}
+	// for i := 0; i < len(txOrdererRpcUrls); i++ {
+	// 	if txOrdererRpcUrls[i] == "http://210.222.63.26:5000" {
+	// 		index := uint64(i)
+	// 		return &index, nil
+	// 	}
+	// }
 
-	mod := finalizeBlockNumber % uint64(len(sequencerRpcUrls))
+	mod := finalizeBlockNumber % uint64(len(txOrdererRpcUrls))
 	return &mod, nil
 }
 
-func (f *finalizer) fetchSequencerAddresses(ctx context.Context, platformBlockNumber uint64) ([]string, error) {
+func (f *finalizer) fetchTxOrdererAddresses(ctx context.Context, platformBlockNumber uint64) ([]string, error) {
 	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
 
@@ -626,7 +626,7 @@ func (f *finalizer) fetchSequencerAddresses(ctx context.Context, platformBlockNu
 		return nil, err
 	}
 
-	METHOD := "getSequencers"
+	METHOD := "getTxOrderers"
 	contractAddress := common.HexToAddress(f.cfg.LivenessContractAddress)
 
 	data, err := contractAbi.Pack(METHOD, f.cfg.ClusterId)
@@ -641,79 +641,79 @@ func (f *finalizer) fetchSequencerAddresses(ctx context.Context, platformBlockNu
 
 	result, err := f.ethClient.CallContract(reqCtx, query, big.NewInt(int64(platformBlockNumber)))
 	if err != nil {
-		log.Error("failed to make a contract call to retrieve the sequencer URL list", "error", err.Error())
+		log.Error("failed to make a contract call to retrieve the tx_orderer URL list", "error", err.Error())
 
 		return nil, err
 	}
 
-	var sequencerList []common.Address
-	if contractAbi.UnpackIntoInterface(&sequencerList, METHOD, result) != nil {
+	var txOrdererList []common.Address
+	if contractAbi.UnpackIntoInterface(&txOrdererList, METHOD, result) != nil {
 		return nil, err
 	}
 
-	var sequencerAddresses []string
-	for _, addr := range sequencerList {
+	var txOrdererAddresses []string
+	for _, addr := range txOrdererList {
 		if addr != common.HexToAddress("0x0000000000000000000000000000000000000000") {
-			sequencerAddresses = append(sequencerAddresses, addr.Hex())
+			txOrdererAddresses = append(txOrdererAddresses, addr.Hex())
 		}
 	}
 
-	return sequencerAddresses, nil
+	return txOrdererAddresses, nil
 }
 
-func (f *finalizer) fetchSequencerRpcUrls(ctx context.Context, sequencerAddresses []string) ([]string, []string, error) {
+func (f *finalizer) fetchTxOrdererRpcUrls(ctx context.Context, txOrdererAddresses []string) ([]string, []string, error) {
 	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
 
-	body := newJsonRpcRequest(GetSequencerRpcUrlList, GetSequencerRpcUrlsParams{
-		SequencerAddresses: sequencerAddresses,
+	body := newJsonRpcRequest(GetTxOrdererRpcUrlList, GetTxOrdererRpcUrlsParams{
+		TxOrdererAddresses: txOrdererAddresses,
 	})
 
-	res := &GetSequencerRpcUrlsResponse{}
+	res := &GetTxOrdererRpcUrlsResponse{}
 	if err := f.sbbClient.Send(reqCtx, f.cfg.SeedNodeUrl, body, res); err != nil {
-		log.Error("failed to send get_sequencer_rpc_url_list request to seeder node", "error", err.Error())
+		log.Error("failed to send get_tx_orderer_rpc_url_list request to seeder node", "error", err.Error())
 
 		return nil, nil, err
 	}
 
-	var validSequencerAddresses []string
-	var sequencerRpcUrls []string
-	for _, sequencerRpcUrl := range res.SequencerRpcUrls {
-		if sequencerRpcUrl.ClusterRpcUrl != "" {
-			validSequencerAddresses = append(validSequencerAddresses, sequencerRpcUrl.Address)
-			sequencerRpcUrls = append(sequencerRpcUrls, sequencerRpcUrl.ClusterRpcUrl)
+	var validTxOrdererAddresses []string
+	var txOrdererRpcUrls []string
+	for _, txOrdererRpcUrl := range res.TxOrdererRpcUrls {
+		if txOrdererRpcUrl.ClusterRpcUrl != "" {
+			validTxOrdererAddresses = append(validTxOrdererAddresses, txOrdererRpcUrl.Address)
+			txOrdererRpcUrls = append(txOrdererRpcUrls, txOrdererRpcUrl.ClusterRpcUrl)
 		}
 	}
 
-	return validSequencerAddresses, sequencerRpcUrls, nil
+	return validTxOrdererAddresses, txOrdererRpcUrls, nil
 }
 
-func (f *finalizer) getNextLeaderSequencerIndex(sequencerCount uint64, currentLeaderSeqeuncerIndex uint64) (*uint64, error) {
-	if sequencerCount < 1 {
+func (f *finalizer) getNextLeaderTxOrdererIndex(txOrdererCount uint64, currentLeaderTxOrdererIndex uint64) (*uint64, error) {
+	if txOrdererCount < 1 {
 		return nil, errors.New("cannot divide by zero")
 	}
 
-	nextLeaderSequencerIndex := (currentLeaderSeqeuncerIndex + 1) % sequencerCount
+	nextLeaderTxOrdererIndex := (currentLeaderTxOrdererIndex + 1) % txOrdererCount
 
-	return &nextLeaderSequencerIndex, nil
+	return &nextLeaderTxOrdererIndex, nil
 }
 
-func (f *finalizer) increaseLeaderSequencerIndex(sequencerCount uint64, leaderSequencerIndex *uint64) error {
-	if sequencerCount < 1 {
+func (f *finalizer) increaseLeaderTxOrdererIndex(txOrdererCount uint64, leaderTxOrdererIndex *uint64) error {
+	if txOrdererCount < 1 {
 		return errors.New("cannot divide by zero")
 	}
 
-	*leaderSequencerIndex = (*leaderSequencerIndex + 1) % sequencerCount
+	*leaderTxOrdererIndex = (*leaderTxOrdererIndex + 1) % txOrdererCount
 
 	return nil
 }
 
-func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint64, finalizeBlockNumber uint64, sequencerRpcUrls []string, leaderSequencerIndex *uint64, sequencerAddresses []string) error {
+func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint64, finalizeBlockNumber uint64, txOrdererRpcUrls []string, leaderTxOrdererIndex *uint64, txOrdererAddresses []string) error {
 
-	sequencerCount := len(sequencerRpcUrls)
+	txOrdererCount := len(txOrdererRpcUrls)
 
-	for i := 0; i < sequencerCount; i++ {
-		nextSequencerIndex, err := f.getNextLeaderSequencerIndex(uint64(sequencerCount), *leaderSequencerIndex)
+	for i := 0; i < txOrdererCount; i++ {
+		nextTxOrdererIndex, err := f.getNextLeaderTxOrdererIndex(uint64(txOrdererCount), *leaderTxOrdererIndex)
 		if err != nil {
 			return err
 		}
@@ -725,8 +725,8 @@ func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint6
 			PlatformBlockHeight: platformBlockNumber,
 			RollupBlockHeight:   finalizeBlockNumber,
 
-			BlockCreatorAddress:     strings.ToLower(sequencerAddresses[*leaderSequencerIndex]),
-			NextBlockCreatorAddress: strings.ToLower(sequencerAddresses[*nextSequencerIndex]),
+			BlockCreatorAddress:     strings.ToLower(txOrdererAddresses[*leaderTxOrdererIndex]),
+			NextBlockCreatorAddress: strings.ToLower(txOrdererAddresses[*nextTxOrdererIndex]),
 		}
 
 		messageBytes, err := json.Marshal(message)
@@ -752,17 +752,17 @@ func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint6
 
 		body := newJsonRpcRequest(FinalizeBlock, params)
 
-		reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
+		reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
 		defer reqCancel()
 
-		if err = f.sbbClient.Send(reqCtx, sequencerRpcUrls[*leaderSequencerIndex], body, nil); err != nil {
+		if err = f.sbbClient.Send(reqCtx, txOrdererRpcUrls[*leaderTxOrdererIndex], body, nil); err != nil {
 			if !strings.Contains(err.Error(), "connection refused") {
-				return fmt.Errorf("failed to send finalize_block request to SBB: %s request params: platformHeight %d rollupHeight %d url %s now %d", err.Error(), message.PlatformBlockHeight, message.RollupBlockHeight, sequencerRpcUrls[*leaderSequencerIndex], time.Now().UnixMilli())
+				return fmt.Errorf("failed to send finalize_block request to SBB: %s request params: platformHeight %d rollupHeight %d url %s now %d", err.Error(), message.PlatformBlockHeight, message.RollupBlockHeight, txOrdererRpcUrls[*leaderTxOrdererIndex], time.Now().UnixMilli())
 			}
 
-			log.Warn("failed to finalizing due to no sequencer found. retrying with a different sequencer")
+			log.Warn("failed to finalizing due to no tx_orderer found. retrying with a different tx_orderer")
 
-			if err = f.increaseLeaderSequencerIndex(uint64(sequencerCount), leaderSequencerIndex); err != nil {
+			if err = f.increaseLeaderTxOrdererIndex(uint64(txOrdererCount), leaderTxOrdererIndex); err != nil {
 				return err
 			}
 
@@ -776,10 +776,10 @@ func (f *finalizer) finalizeBlock(ctx context.Context, platformBlockNumber uint6
 		return nil
 	}
 
-	return errors.New("no sequencer")
+	return errors.New("no tx_orderer")
 }
 
-func (f *finalizer) getRawTransactions(ctx context.Context, finalizedBlockNumber uint64, sequencerRpcUrls []string, leaderSequencerIndex *uint64) (types.Transactions, error) {
+func (f *finalizer) getRawTransactions(ctx context.Context, finalizedBlockNumber uint64, txOrdererRpcUrls []string, leaderTxOrdererIndex *uint64) (types.Transactions, error) {
 	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
 
@@ -791,17 +791,17 @@ func (f *finalizer) getRawTransactions(ctx context.Context, finalizedBlockNumber
 	body := newJsonRpcRequest(GetRawTransactionList, params)
 
 	res := &GetRawTransactionsResponse{}
-	sequencerCount := len(sequencerRpcUrls)
+	txOrdererCount := len(txOrdererRpcUrls)
 
-	for i := 0; i < sequencerCount; i++ {
-		if err := f.sbbClient.Send(reqCtx, sequencerRpcUrls[*leaderSequencerIndex], body, res); err != nil {
+	for i := 0; i < txOrdererCount; i++ {
+		if err := f.sbbClient.Send(reqCtx, txOrdererRpcUrls[*leaderTxOrdererIndex], body, res); err != nil {
 			if !strings.Contains(err.Error(), "connection refused") {
-				return nil, fmt.Errorf("failed to send get_raw_transaction_list request to SBB: %s height %d url %s now %d", err.Error(), params.RollupBlockHeight, sequencerRpcUrls[*leaderSequencerIndex], time.Now().UnixMilli())
+				return nil, fmt.Errorf("failed to send get_raw_transaction_list request to SBB: %s height %d url %s now %d", err.Error(), params.RollupBlockHeight, txOrdererRpcUrls[*leaderTxOrdererIndex], time.Now().UnixMilli())
 			}
 
-			log.Warn("failed to get raw transactions due to no sequencer found. retrying with a different sequencer")
+			log.Warn("failed to get raw transactions due to no tx_orderer found. retrying with a different tx_orderer")
 
-			if err = f.increaseLeaderSequencerIndex(uint64(sequencerCount), leaderSequencerIndex); err != nil {
+			if err = f.increaseLeaderTxOrdererIndex(uint64(txOrdererCount), leaderTxOrdererIndex); err != nil {
 				return nil, err
 			}
 			continue
@@ -815,7 +815,7 @@ func (f *finalizer) getRawTransactions(ctx context.Context, finalizedBlockNumber
 		return transactions, nil
 	}
 
-	return nil, errors.New("no sequencer")
+	return nil, errors.New("no tx_orderer")
 }
 
 func Retry(ctx context.Context, fn func() error, retryInterval time.Duration) {
@@ -1307,9 +1307,9 @@ func (f *finalizer) handleProcessTransactionError(ctx context.Context, result *s
 func (f *finalizer) checkIfProverRestarted(proverID string) {
 	if f.proverID != "" && f.proverID != proverID {
 		f.LogEvent(context.Background(), event.Level_Critical, event.EventID_FinalizerRestart,
-			fmt.Sprintf("proverID changed from %s to %s, restarting sequencer to discard current WIP batch and work with new executor", f.proverID, proverID), nil)
+			fmt.Sprintf("proverID changed from %s to %s, restarting tx_orderer to discard current WIP batch and work with new executor", f.proverID, proverID), nil)
 
-		log.Fatal("proverID changed from %s to %s, restarting sequencer to discard current WIP batch and work with new executor")
+		log.Fatal("proverID changed from %s to %s, restarting tx_orderer to discard current WIP batch and work with new executor")
 	}
 }
 
@@ -1373,18 +1373,18 @@ func newJsonRpcRequest[T any](method Method, params T) JSONRPCRequest[T] {
 	}
 }
 
-type GetSequencerRpcUrlsParams struct {
-	SequencerAddresses []string `json:"sequencer_address_list"`
+type GetTxOrdererRpcUrlsParams struct {
+	TxOrdererAddresses []string `json:"tx_orderer_address_list"`
 }
 
-type SequencerRpcUrl struct {
+type TxOrdererRpcUrl struct {
 	Address        string `json:"address"`
 	ExternalRpcUrl string `json:"external_rpc_url"`
 	ClusterRpcUrl  string `json:"cluster_rpc_url"`
 }
 
-type GetSequencerRpcUrlsResponse struct {
-	SequencerRpcUrls []SequencerRpcUrl `json:"sequencer_rpc_url_list"`
+type GetTxOrdererRpcUrlsResponse struct {
+	TxOrdererRpcUrls []TxOrdererRpcUrl `json:"tx_orderer_rpc_url_list"`
 }
 
 type FinalizeBlockMessageParams struct {
@@ -1421,7 +1421,7 @@ var abiString string = `[
           "type": "string"
         }
       ],
-      "name": "getSequencers",
+      "name": "getTxOrderers",
       "outputs": [
         {
           "internalType": "address[]",

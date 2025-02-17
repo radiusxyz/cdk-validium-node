@@ -94,8 +94,8 @@ type FinalizerCfg struct {
 	// Metrics is the config for the sequencer metrics
 	Metrics MetricsCfg `mapstructure:"Metrics"`
 
-	// UseExternalSequencer
-	UseExternalSequencer bool `mapstructure:"UseExternalSequencer"`
+	// UseTxOrderer
+	UseTxOrderer bool `mapstructure:"UseTxOrderer"`
 
 	MaxBlockTransactionsMapSize int `mapstructure:"MaxBlockTransactionsMapSize"`
 
@@ -116,8 +116,8 @@ type FinalizerCfg struct {
 	// ClusterId
 	ClusterId string `mapstructure:"ClusterId"`
 
-	// SeedNodeUrl is used allow Non-Sequencer nodes
-	// to relay transactions to the Sequencer node
+	// SeedNodeUrl is used allow Non-Tx-orderer nodes
+	// to relay transactions to the tx-orderer node
 	SeedNodeUrl string `mapstructure:"SeedNodeUrl"`
 
 	// SequencerPrivateKey Private key of the trusted sequencer
