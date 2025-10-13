@@ -661,15 +661,15 @@ func (f *finalizer) fetchTxOrdererAddresses(ctx context.Context, platformBlockNu
 	return txOrdererAddresses, nil
 }
 
-func (f *finalizer) fetchTxOrdererRpcUrls(ctx context.Context, txOrdererAddresses []string) ([]string, []string, error) {
+func (f *finalizer) fetchTxOrdererRpcUrls(ctx context.Context, sequencerAddresses []string) ([]string, []string, error) {
 	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
 
-	body := newJsonRpcRequest(GetTxOrdererRpcUrlList, GetTxOrdererRpcUrlsParams{
-		TxOrdererAddresses: txOrdererAddresses,
+	body := newJsonRpcRequest(GetTxOrdererRpcUrlList, GetSequencerRpcUrlsParams{
+		SequencerAddresses: sequencerAddresses,
 	})
 
-	res := &GetTxOrdererRpcUrlsResponse{}
+	res := &GetSequencerRpcUrlsResponse{}
 	if err := f.sbbClient.Send(reqCtx, f.cfg.SeedNodeUrl, body, res); err != nil {
 		log.Error("failed to send get_tx_orderer_rpc_url_list request to seeder node", "error", err.Error())
 
@@ -678,7 +678,7 @@ func (f *finalizer) fetchTxOrdererRpcUrls(ctx context.Context, txOrdererAddresse
 
 	var validTxOrdererAddresses []string
 	var txOrdererRpcUrls []string
-	for _, txOrdererRpcUrl := range res.TxOrdererRpcUrls {
+	for _, txOrdererRpcUrl := range res.SequencerRpcUrls {
 		if txOrdererRpcUrl.ClusterRpcUrl != "" {
 			validTxOrdererAddresses = append(validTxOrdererAddresses, txOrdererRpcUrl.Address)
 			txOrdererRpcUrls = append(txOrdererRpcUrls, txOrdererRpcUrl.ClusterRpcUrl)
@@ -1373,8 +1373,8 @@ func newJsonRpcRequest[T any](method Method, params T) JSONRPCRequest[T] {
 	}
 }
 
-type GetTxOrdererRpcUrlsParams struct {
-	TxOrdererAddresses []string `json:"tx_orderer_address_list"`
+type GetSequencerRpcUrlsParams struct {
+	SequencerAddresses []string `json:"sequencer_address_list"`
 }
 
 type TxOrdererRpcUrl struct {
@@ -1383,8 +1383,8 @@ type TxOrdererRpcUrl struct {
 	ClusterRpcUrl  string `json:"cluster_rpc_url"`
 }
 
-type GetTxOrdererRpcUrlsResponse struct {
-	TxOrdererRpcUrls []TxOrdererRpcUrl `json:"tx_orderer_rpc_url_list"`
+type GetSequencerRpcUrlsResponse struct {
+	SequencerRpcUrls []TxOrdererRpcUrl `json:"sequencer_rpc_url_list"`
 }
 
 type FinalizeBlockMessageParams struct {
