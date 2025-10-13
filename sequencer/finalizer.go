@@ -1421,7 +1421,7 @@ var abiString string = `[
           "type": "string"
         }
       ],
-      "name": "getTxOrderers",
+      "name": "getSequencers",
       "outputs": [
         {
           "internalType": "address[]",
