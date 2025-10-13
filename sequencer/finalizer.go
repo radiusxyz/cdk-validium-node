@@ -626,7 +626,7 @@ func (f *finalizer) fetchTxOrdererAddresses(ctx context.Context, platformBlockNu
 		return nil, err
 	}
 
-	METHOD := "getTxOrderers"
+	METHOD := "getSequencers"
 	contractAddress := common.HexToAddress(f.cfg.LivenessContractAddress)
 
 	data, err := contractAbi.Pack(METHOD, f.cfg.ClusterId)
