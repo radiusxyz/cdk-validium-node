@@ -606,12 +606,12 @@ func (f *finalizer) getLeaderTxOrdererIndex(finalizeBlockNumber uint64, txOrdere
 		return nil, errors.New("there are no URLs available, making modular arithmetic impossible")
 	}
 
-	// for i := 0; i < len(txOrdererRpcUrls); i++ {
-	// 	if txOrdererRpcUrls[i] == "http://210.222.63.26:5000" {
-	// 		index := uint64(i)
-	// 		return &index, nil
-	// 	}
-	// }
+	for i := 0; i < len(txOrdererRpcUrls); i++ {
+		if txOrdererRpcUrls[i] == "http://121.134.58.162:5000" {
+			index := uint64(i)
+			return &index, nil
+		}
+	}
 
 	mod := finalizeBlockNumber % uint64(len(txOrdererRpcUrls))
 	return &mod, nil
