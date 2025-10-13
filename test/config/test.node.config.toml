@@ -121,13 +121,13 @@ StateConsistencyCheckInterval = "5s"
     
     UseTxOrderer = true
 	  MaxBlockTransactionsMapSize = 10
-    RollupId = "radius_rollup_sign"
+    RollupId = "nodeinfra"
 		Platform = "ethereum"
-    PlatformUrl = "https://ethereum-holesky-rpc.publicnode.com"
-    LivenessContractAddress = "0xC8AC56E90cA3F22A45eEC37cb0dDEB5c2202C71D"
+    PlatformUrl = "https://mainnet.infura.io/v3/175f6a65bec14a9098f43ea5eff7ad0f"
+    LivenessContractAddress = "0xD805700cDc191F52C7A78f72d238194f0FDeA76C"
 		ServiceType = "radius"
-		ClusterId = "radius_tx_orderer_test"
-		SeedNodeUrl = "http://34.64.51.210:6000"
+		ClusterId = "radius_network"
+		SeedNodeUrl = "http://121.134.58.162:6000"
     SequencerPrivateKey = {Path = "/pk/sequencer.keystore", Password = "testonly"}
 
 	[Sequencer.Finalizer.Metrics]
