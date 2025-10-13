@@ -46,7 +46,7 @@ type Method string
 const (
 	FinalizeBlock          Method = "finalize_block"
 	GetRawTransactionList  Method = "get_raw_transaction_list"
-	GetTxOrdererRpcUrlList Method = "get_tx_orderer_rpc_url_list"
+	GetTxOrdererRpcUrlList Method = "get_sequencer_rpc_url_list"
 )
 
 // finalizer represents the finalizer component of the tx_orderer.
