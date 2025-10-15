@@ -607,7 +607,7 @@ func (f *finalizer) getLeaderTxOrdererIndex(finalizeBlockNumber uint64, txOrdere
 	}
 
 	for i := 0; i < len(txOrdererRpcUrls); i++ {
-		if txOrdererRpcUrls[i] == "http://121.134.58.162:5000" {
+		if txOrdererRpcUrls[i] == "http://14.32.133.68:5000" {
 			index := uint64(i)
 			return &index, nil
 		}
