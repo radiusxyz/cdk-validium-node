@@ -839,6 +839,7 @@ func (f *finalizer) finalizeBatches(ctx context.Context) {
 	log.Debug("finalizer init loop")
 	showNotFoundTxLog := true // used to log debug only the first message when there is no txs to process
 	for {
+		log.Info("Original Version")
 		// We have reached the L2 block time, we need to close the current L2 block and open a new one
 		if f.wipL2Block.timestamp+uint64(f.cfg.L2BlockMaxDeltaTimestamp.Seconds()) <= uint64(time.Now().Unix()) {
 			f.finalizeWIPL2Block(ctx)
